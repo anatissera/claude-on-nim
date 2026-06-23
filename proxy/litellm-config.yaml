@@ -3,6 +3,8 @@
 # Model names on the left are what the agent requests via options.model;
 # litellm_params.model on the right is the actual NIM-hosted model.
 model_list:
+  # These three are what the headless Docker agent uses (matched against
+  # real Claude model names so the SDK's own assumptions hold).
   - model_name: claude-sonnet-4-6 # primary: strong open tool-calling model
     litellm_params:
       model: nvidia_nim/z-ai/glm-5.1
@@ -14,6 +16,24 @@ model_list:
   - model_name: claude-haiku-4-5 # fallback / cheap-turn model
     litellm_params:
       model: nvidia_nim/moonshotai/kimi-k2.6
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+  # Friendly direct aliases for interactive use via scripts/claude-nim.sh
+  # <shortcut>, so ANTHROPIC_MODEL can be set to the readable name directly.
+  - model_name: glm
+    litellm_params:
+      model: nvidia_nim/z-ai/glm-5.1
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+  - model_name: deepseek
+    litellm_params:
+      model: nvidia_nim/deepseek-ai/deepseek-v4-pro
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+  - model_name: kimi
+    litellm_params:
+      model: nvidia_nim/moonshotai/kimi-k2.6
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+  - model_name: gpt-oss
+    litellm_params:
+      model: nvidia_nim/openai/gpt-oss-120b
       api_key: os.environ/NVIDIA_NIM_API_KEY
 
 litellm_settings:

@@ -2,30 +2,60 @@
 
 An experimental implementation of an autonomous AI agent powered by the Claude Agent SDK, running inference on NVIDIA's free NIM endpoints instead of Anthropic, with automated code verification (linting, type-checking, testing) wired into the agent's execution loop.
 
+## Interactive use: `claude-nim`
+
+`scripts/claude-nim.sh` launches the normal `claude` CLI with all your skills, MCPs, settings, and `CLAUDE.md` context, just redirected to run inference through the proxy onto a NIM-hosted model instead of Anthropic. It auto-starts the proxy if it isn't already running.
+
+```bash
+./scripts/claude-nim.sh              # fresh session, default model (glm-5.1)
+./scripts/claude-nim.sh gpt-oss      # fresh session on gpt-oss-120b
+./scripts/claude-nim.sh kimi --continue          # continue last conversation in this dir, now on kimi-k2.6
+./scripts/claude-nim.sh deepseek --resume <id>   # resume a specific session on deepseek-v4-pro
+```
+
+Model shortcuts to NIM endpoints (`proxy/litellm-config.yaml`):
+
+| Shortcut            | NIM model                  |
+| -------------------- | --------------------------- |
+| `glm`                | `z-ai/glm-5.1`              |
+| `deepseek`           | `deepseek-ai/deepseek-v4-pro` |
+| `kimi`               | `moonshotai/kimi-k2.6`      |
+| `gpt-oss`            | `openai/gpt-oss-120b`       |
+
+**Setup global alias (one-time):**
+
+```bash
+echo "alias claude-nim='/path/to/your/repo/nim-self-verifying-agent/scripts/claude-nim.sh'" >> ~/.bashrc
+source ~/.bashrc
+```
+
+Then from any repo: 
+```bash
+claude-nim gpt-oss --continue
+```
+
+**Note:** `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL` are read once at process startup. To switch models mid-conversation, exit and relaunch with `--continue` or `--resume`, which replays the history into the new process.
+
 ## Overview
 
 This project explores:
 
-- **Endpoint redirection:** Using `ANTHROPIC_BASE_URL` + a protocol-translation proxy to route Claude Agent SDK requests to NVIDIA NIM (OpenAI-compatible endpoints).
+- **Endpoint redirection:** Using `ANTHROPIC_BASE_URL` plus a protocol-translation proxy to route Claude Agent SDK requests to NVIDIA NIM (OpenAI-compatible endpoints).
 - **Self-verifying execution:** A `PostToolUse` hook that runs linters, type checkers, and test suites on generated code and feeds failures back into the agent loop for self-correction.
 - **Containerized autonomy:** The entire agent runs in Docker with Git credentials injected at startup, enabling true autonomous commits and pushes (within guardrails).
 
 ## Key design decisions
 
-1. **No SDK fork.** The endpoint is swapped via environment variables; verification is injected via hooks — both are sanctioned, supported extensions.
+1. **No SDK fork.** The endpoint is swapped via environment variables; verification is injected via hooks. Both are sanctioned, supported extensions.
 2. **Translation proxy required.** The Claude Agent SDK speaks the Anthropic Messages API; NVIDIA NIM speaks OpenAI. A proxy (LiteLLM or custom) translates between them.
 3. **Hooks enforce verification deterministically.** Unlike system prompts (advisory), `PostToolUse` hooks guarantee that code is linted/typed/tested before the model sees it.
-
-## Project status
-
-🚧 **Implementation in progress.** See [`PRD.md`](PRD.md) for detailed findings, architecture, and implementation roadmap. The agent driver, verification hooks, and Docker setup below exist; end-to-end validation against a real NVIDIA NIM key has not been run yet (see Step 1 below — this is the first thing to do with real credentials).
 
 ## Repo layout
 
 ```
 agent/        Claude Agent SDK driver, hooks, verification runners (TypeScript)
 proxy/        LiteLLM config that translates Anthropic <-> NVIDIA NIM (OpenAI)
-scripts/      validate-proxy.sh — smoke-tests the proxy before wiring up the agent
+scripts/      validate-proxy.sh, smoke-tests the proxy before wiring up the agent
 workspace/    mounted target repo the agent edits (gitignored, empty by default)
 docker-compose.yml   proxy + agent services
 ```
@@ -34,14 +64,14 @@ docker-compose.yml   proxy + agent services
 
 1. **Get a free NVIDIA NIM API key** at [build.nvidia.com](https://build.nvidia.com) (no credit card).
 2. Copy `.env.example` to `.env` and fill in `NVIDIA_NIM_API_KEY`, `PROXY_MASTER_KEY` (any random string), and `GITHUB_TOKEN` (scoped to one repo) if you want the agent to push.
-3. **Validate the proxy first** (PRD Step 1 — nothing else works until this passes):
+3. **Validate the proxy first** (PRD Step 1: nothing else works until this passes):
    ```bash
    docker compose up -d proxy
    set -a; source .env; set +a
    ./scripts/validate-proxy.sh
    ```
-   This confirms the proxy returns Anthropic-shaped responses, including a real `tool_use` block — the part the Agent SDK actually depends on.
-4. **Run the agent against a workspace** (PRD Step 2 — minimal SDK run):
+   This confirms the proxy returns Anthropic-shaped responses, including a real `tool_use` block that the Agent SDK actually depends on.
+4. **Run the agent against a workspace** (PRD Step 2: minimal SDK run):
    ```bash
    cp -r /path/to/your/repo/* workspace/
    docker compose run --rm agent "List the files in this repo and summarize what it does"
