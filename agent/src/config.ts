@@ -12,7 +12,7 @@ export const config = {
   model: process.env.AGENT_MODEL ?? "claude-sonnet-4-6",
   fallbackModel: process.env.AGENT_FALLBACK_MODEL,
   cwd: process.env.AGENT_CWD ?? "/workspace",
-  permissionMode: (process.env.AGENT_PERMISSION_MODE ?? "acceptEdits") as
+  permissionMode: (process.env.AGENT_PERMISSION_MODE ?? "bypassPermissions") as
     | "default"
     | "acceptEdits"
     | "bypassPermissions"

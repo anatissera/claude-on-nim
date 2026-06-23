@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { HookCallback, PostToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
-import { runTestSuite, verifyFile } from "../verify/runners.js";
-import { formatTestFailure, formatVerifyReport } from "../verify/format.js";
+import { runProjectLint, runTestSuite, verifyFile } from "../verify/runners.js";
+import { formatLintFailure, formatTestFailure, formatVerifyReport } from "../verify/format.js";
 
 const EDIT_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
 
@@ -50,13 +50,20 @@ export function createVerifyBatchHook(options: VerifyHookOptions): HookCallback 
   return async (input) => {
     if (input.hook_event_name !== "PostToolBatch") return {};
 
-    const result = await runTestSuite(options.projectRoot, options.timeoutMs);
-    if (!result || result.passed) return {};
+    const [lint, tests] = await Promise.all([
+      runProjectLint(options.projectRoot, options.timeoutMs),
+      runTestSuite(options.projectRoot, options.timeoutMs),
+    ]);
+
+    const sections: string[] = [];
+    if (lint && !lint.passed) sections.push(formatLintFailure(lint, options.maxOutputChars));
+    if (tests && !tests.passed) sections.push(formatTestFailure(tests, options.maxOutputChars));
+    if (sections.length === 0) return {};
 
     return {
       hookSpecificOutput: {
         hookEventName: "PostToolBatch",
-        additionalContext: formatTestFailure(result, options.maxOutputChars),
+        additionalContext: sections.join("\n\n"),
       },
     };
   };

@@ -119,3 +119,28 @@ export async function runTestSuite(projectRoot: string, timeoutMs: number): Prom
   }
   return null;
 }
+
+/**
+ * Lints the whole project, used by the debounced PostToolBatch hook as a
+ * backstop. createVerifyFileHook only sees edits made through Write/Edit/
+ * MultiEdit; a model that changes code via Bash (sed, a formatter's own
+ * --fix flag, etc.) skips that per-file check entirely. This catches it on
+ * the next batch boundary regardless of which tool touched the file.
+ */
+export async function runProjectLint(projectRoot: string, timeoutMs: number): Promise<CheckResult | null> {
+  if (await exists(path.join(projectRoot, "node_modules/.bin/eslint"))) {
+    return run(["node_modules/.bin/eslint", "."], projectRoot, timeoutMs);
+  }
+  if (await which("ruff")) {
+    return run(["ruff", "check", "."], projectRoot, timeoutMs);
+  }
+  return null;
+}
+
+async function which(bin: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn("which", [bin], { shell: false });
+    child.on("close", (code) => resolve(code === 0));
+    child.on("error", () => resolve(false));
+  });
+}

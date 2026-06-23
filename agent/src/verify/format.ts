@@ -31,3 +31,10 @@ export function formatTestFailure(check: CheckResult, maxChars: number): string 
     formatCheck(check, maxChars),
   ].join("\n\n");
 }
+
+export function formatLintFailure(check: CheckResult, maxChars: number): string {
+  return [
+    "Project-wide lint FAILED after this batch of edits (this catches changes made via Bash, not just Write/Edit). Fix before continuing:",
+    formatCheck(check, maxChars),
+  ].join("\n\n");
+}
