@@ -1,0 +1,30 @@
+# LiteLLM proxy config: exposes an Anthropic-Messages-compatible /v1/messages
+# endpoint and translates to NVIDIA NIM's OpenAI-compatible chat/completions.
+# Model names on the left are what the agent requests via options.model;
+# litellm_params.model on the right is the actual NIM-hosted model.
+model_list:
+  - model_name: claude-sonnet-4-6 # primary: strong open tool-calling model
+    litellm_params:
+      model: nvidia_nim/z-ai/glm-5.1
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+  - model_name: claude-opus-4-8 # heavier model, used sparingly if selected
+    litellm_params:
+      model: nvidia_nim/deepseek-ai/deepseek-v4-pro
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+  - model_name: claude-haiku-4-5 # fallback / cheap-turn model
+    litellm_params:
+      model: nvidia_nim/moonshotai/kimi-k2.6
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+
+litellm_settings:
+  # NIM doesn't support every Anthropic-specific param (e.g. some beta
+  # headers); drop them instead of erroring so the agent loop doesn't stall.
+  drop_params: true
+  # NVIDIA NIM is OpenAI-compatible and the direct chat/completions route is
+  # the one that supports tool calls reliably for the current hosted models.
+  use_chat_completions_url_for_anthropic_messages: true
+  num_retries: 3
+  request_timeout: 600
+
+general_settings:
+  master_key: os.environ/PROXY_MASTER_KEY
