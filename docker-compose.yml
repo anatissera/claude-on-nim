@@ -1,0 +1,53 @@
+services:
+  proxy:
+    # Pinned to an explicit release, not the rolling `main-stable` tag (being
+    # deprecated 2026-06-30) and well past the malware-compromised
+    # 1.82.7/1.82.8 PyPI releases.
+    image: ghcr.io/berriai/litellm:v1.89.1
+    command: ["--config", "/app/config.yaml"]
+    environment:
+      NVIDIA_NIM_API_KEY: "${NVIDIA_NIM_API_KEY}"
+      PROXY_MASTER_KEY: "${PROXY_MASTER_KEY}"
+      LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES: "true"
+    volumes:
+      - ./proxy/litellm-config.yaml:/app/config.yaml:ro
+    ports:
+      - "4000:4000"
+    healthcheck:
+      # The litellm image ships no wget/curl; use the bundled python3 instead.
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import sys,urllib.request as u; sys.exit(0 if u.urlopen('http://localhost:4000/health/liveliness').status==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  agent:
+    build: ./agent
+    depends_on:
+      proxy:
+        condition: service_healthy
+    environment:
+      ANTHROPIC_BASE_URL: "http://proxy:4000"
+      ANTHROPIC_AUTH_TOKEN: "${PROXY_MASTER_KEY}"
+      AGENT_MODEL: "${AGENT_MODEL:-claude-sonnet-4-6}"
+      AGENT_FALLBACK_MODEL: "${AGENT_FALLBACK_MODEL:-claude-haiku-4-5}"
+      AGENT_PERMISSION_MODE: "${AGENT_PERMISSION_MODE:-bypassPermissions}"
+      AGENT_MAX_TURNS: "${AGENT_MAX_TURNS:-40}"
+      AGENT_CWD: /workspace
+      VERIFY_TIMEOUT_MS: "${VERIFY_TIMEOUT_MS:-120000}"
+      VERIFY_MAX_OUTPUT_CHARS: "${VERIFY_MAX_OUTPUT_CHARS:-4000}"
+      GIT_USER_NAME: "${GIT_USER_NAME:-nim-self-verifying-agent}"
+      GIT_USER_EMAIL: "${GIT_USER_EMAIL:-agent@example.invalid}"
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+      HOST_UID: "${HOST_UID:-1000}"
+      HOST_GID: "${HOST_GID:-1000}"
+    volumes:
+      - ./workspace:/workspace
+    # No host Docker socket, no privileged mode. Add an egress allowlist
+    # (NIM + GitHub only) at the network layer before running with real
+    # credentials against an untrusted prompt.

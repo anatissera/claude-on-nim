@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+.env
+.DS_Store
+
+# Target repo the agent edits — mounted, not part of this repo.
+workspace/*
+!workspace/.gitkeep
