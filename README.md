@@ -189,3 +189,7 @@ docker-compose.yml  proxy + agent services
 [Claude Agent SDK docs](https://code.claude.com/docs/en/agent-sdk/)
 [NVIDIA NIM API](https://docs.nvidia.com/nim/large-language-models/latest/api-reference.html)
 [LiteLLM](https://github.com/BerriAI/litellm)
+
+## Credits
+
+Conceptual and architectural inspiration by [nicoRomeroCuruchet](https://github.com/nicoRomeroCuruchet).
