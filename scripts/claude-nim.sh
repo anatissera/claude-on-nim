@@ -3,23 +3,31 @@
 # settings, CLAUDE.md — but redirected to run inference through the
 # LiteLLM proxy onto NVIDIA NIM instead of Anthropic.
 #
-# IMPORTANT: this can only pick the model for a *new* `claude` process.
-# ANTHROPIC_BASE_URL/ANTHROPIC_MODEL are read once at startup -- there is no
-# way to flip the backend inside an already-running session. To "switch
-# mid-conversation," exit (or open a new terminal) and relaunch with
-# --continue (last conversation in this dir) or --resume <session_id>, which
-# replays the existing history into the new process.
+# Auto-tmux mode: If you're not already in tmux, this script will relaunch
+# itself inside a new persistent session. This way your Claude session
+# survives terminal disconnects and can be switched mid-conversation with
+# /cc-switch without needing to open another terminal or use cc-up.
 #
-# Usage:
-#   ./scripts/claude-nim.sh                   # fresh session, default model (glm-5.1)
-#   ./scripts/claude-nim.sh gpt-oss            # fresh session on gpt-oss-120b
-#   ./scripts/claude-nim.sh kimi --continue    # continue your last conversation, now on kimi-k2.6
-#   ./scripts/claude-nim.sh deepseek --resume <session_id>
+# Usage (from anywhere, with your repo's .claude/ and cwd):
+#   claude-nim                      # fresh session, default model (glm-5.1)
+#   claude-nim gpt-oss              # fresh session on gpt-oss-120b
+#   claude-nim kimi --continue      # continue your last conversation on kimi-k2.6
+#   claude-nim deepseek --resume <session_id>
 #
-# Recognized shortcuts: sonnet|glm, opus|deepseek, haiku|kimi, gpt-oss.
-# Anything else as $1 is treated as a raw litellm model_name. All remaining
-# arguments are passed straight through to `claude`.
+# Model shortcuts: sonnet|glm, opus|deepseek, haiku|kimi, gpt-oss.
+# Inside tmux: /cc-switch <model> to switch models mid-conversation.
+#             /cc-remote [port] to expose this session over Tailscale.
 set -euo pipefail
+
+# If not already in tmux, relaunch inside a new session.
+if [[ -z "${TMUX:-}" ]]; then
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo "WARN: tmux is not installed; running without persistence. Install it with: sudo apt install tmux" >&2
+  else
+    TMUX_SESSION="claude-$(date +%s)"
+    exec tmux new-session -s "$TMUX_SESSION" "$0" "$@"
+  fi
+fi
 
 MODEL_SHORTCUT="${1:-}"
 case "$MODEL_SHORTCUT" in
