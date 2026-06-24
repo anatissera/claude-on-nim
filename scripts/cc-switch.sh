@@ -3,17 +3,24 @@
 #
 # The real `claude` CLI can't flip backends mid-process -- it reads
 # ANTHROPIC_BASE_URL/ANTHROPIC_MODEL once at startup (see claude-nim.sh).
-# This does the best available approximation: ask the outgoing model for a
-# short handoff briefing, then kill and relaunch the pane on the new model
-# with --continue, which replays the full transcript (briefing included).
+# This does the best available approximation: kill and relaunch the pane on
+# the new model with --continue, which replays the full transcript.
 #
-# Usage:
-#   ./scripts/cc-switch.sh work kimi
-#   ./scripts/cc-switch.sh work sonnet --dangerously-skip-permissions
+# Usage (after ./scripts/install.sh, runnable from any directory as `cc-switch`):
+#   cc-switch work kimi                       # from outside: asks the
+#                                              # outgoing model for a brief
+#                                              # handoff via tmux send-keys,
+#                                              # then relaunches.
+#   cc-switch work sonnet --dangerously-skip-permissions
 #
-# If the outgoing model doesn't answer within ~2 minutes (proxy down, rate
-# limited, etc.) this proceeds anyway -- --continue's transcript replay is
-# the fallback, the briefing is just a head start.
+#   cc-switch --self kimi                     # from INSIDE a running
+#                                              # session's own Claude session
+#                                              # (e.g. via a /cc-switch slash
+#                                              # command): write your own
+#                                              # handoff as your response,
+#                                              # then this schedules the
+#                                              # relaunch ~1s later so the
+#                                              # response has time to save.
 set -euo pipefail
 
 if ! command -v tmux >/dev/null 2>&1; then
@@ -21,19 +28,40 @@ if ! command -v tmux >/dev/null 2>&1; then
   exit 1
 fi
 
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+REPO_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+
+if [[ "${1:-}" == "--self" ]]; then
+  MODEL="${2:-}"
+  if [[ -z "$MODEL" ]]; then
+    echo "Usage: $0 --self <model> [claude flags...]" >&2
+    exit 1
+  fi
+  shift 2
+  PANE="${TMUX_PANE:-}"
+  if [[ -z "$PANE" ]]; then
+    echo "FAIL: --self must run inside a tmux pane (TMUX_PANE is not set)." >&2
+    exit 1
+  fi
+  echo "INFO: scheduling relaunch of this pane on model '$MODEL' in ~1s (--continue will replay this transcript, handoff included)..." >&2
+  setsid bash -c "sleep 1; tmux respawn-pane -k -t '$PANE' '$REPO_DIR/scripts/claude-nim.sh $MODEL --continue $*'" </dev/null >/tmp/cc-switch-self.log 2>&1 &
+  disown
+  exit 0
+fi
+
 SESSION_NAME="${1:-}"
 MODEL="${2:-}"
 if [[ -z "$SESSION_NAME" || -z "$MODEL" ]]; then
   echo "Usage: $0 <session-name> <model> [claude flags...]" >&2
+  echo "       $0 --self <model> [claude flags...]" >&2
   exit 1
 fi
 shift 2
 
 TMUX_SESSION="cc-${SESSION_NAME}"
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
-  echo "FAIL: tmux session '$TMUX_SESSION' is not running. Start it first: ./scripts/cc-up.sh $SESSION_NAME" >&2
+  echo "FAIL: tmux session '$TMUX_SESSION' is not running. Start it first: cc-up $SESSION_NAME" >&2
   exit 1
 fi
 

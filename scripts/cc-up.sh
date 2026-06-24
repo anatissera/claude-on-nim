@@ -4,10 +4,10 @@
 # terminal/SSH disconnects, and is the session that cc-remote.sh exposes
 # over ttyd for control from another device (e.g. your phone).
 #
-# Usage:
-#   ./scripts/cc-up.sh                      # session "default", default model
-#   ./scripts/cc-up.sh work kimi            # session "work" on kimi
-#   ./scripts/cc-up.sh work kimi --continue # ...continuing its last conversation
+# Usage (after ./scripts/install.sh, runnable from any directory as `cc-up`):
+#   cc-up                      # session "default", default model
+#   cc-up work kimi            # session "work" on kimi
+#   cc-up work kimi --continue # ...continuing its last conversation
 #
 # Re-running with the same session name attaches to the existing session
 # instead of relaunching, so you don't lose it by accident. To force a fresh
@@ -22,7 +22,8 @@ fi
 SESSION_NAME="${1:-default}"
 shift || true
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+REPO_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
 TMUX_SESSION="cc-${SESSION_NAME}"
 
 if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
