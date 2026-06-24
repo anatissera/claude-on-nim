@@ -1,7 +1,8 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { config } from "./config.js";
 import { createVerifyBatchHook, createVerifyFileHook } from "./hooks/verify.js";
-import { guardBashHook } from "./hooks/guard.js";
+import { createGuardHook } from "./hooks/guard.js";
+import { urlReachable } from "./util/net.js";
 
 const prompt = process.argv.slice(2).join(" ").trim();
 if (!prompt) {
@@ -16,6 +17,15 @@ const verifyOptions = {
 };
 
 async function main(): Promise<void> {
+  const reachable = await urlReachable(config.anthropicBaseUrl);
+  if (reachable === false) {
+    console.error(
+      `Agent run failed: NIM proxy at ${config.anthropicBaseUrl} is not reachable. ` +
+        `Check that the proxy container is up (docker compose ps) before retrying.`,
+    );
+    process.exit(1);
+  }
+
   const stream = query({
     prompt,
     options: {
@@ -37,7 +47,7 @@ async function main(): Promise<void> {
         ANTHROPIC_AUTH_TOKEN: config.anthropicAuthToken,
       },
       hooks: {
-        PreToolUse: [{ matcher: "Bash", hooks: [guardBashHook] }],
+        PreToolUse: [{ hooks: [createGuardHook(config.cwd)] }],
         PostToolUse: [{ matcher: "Write|Edit|MultiEdit", hooks: [createVerifyFileHook(verifyOptions)] }],
         PostToolBatch: [{ hooks: [createVerifyBatchHook(verifyOptions)] }],
       },
@@ -64,7 +74,9 @@ async function main(): Promise<void> {
         }
       }
     } else if (message.type === "result") {
-      console.log(`\n\n[result] ${message.subtype} (${message.num_turns} turns)`);
+      console.log(
+        `\n\n[result] ${message.subtype} (${message.num_turns} turns, $${message.total_cost_usd.toFixed(4)})`,
+      );
       if (message.subtype !== "success") {
         process.exitCode = 1;
       }
