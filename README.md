@@ -2,18 +2,35 @@
 
 An experimental implementation of an autonomous AI agent powered by the Claude Agent SDK, running inference on NVIDIA's free NIM endpoints instead of Anthropic, with automated code verification (linting, type-checking, testing) wired into the agent's execution loop.
 
-## Interactive use: `claude-nim`
+## Interactive use: persistent sessions with tmux + ttyd + model switching
 
-`scripts/claude-nim.sh` launches the normal `claude` CLI with all your skills, MCPs, settings, and `CLAUDE.md` context, just redirected to run inference through the proxy onto a NIM-hosted model instead of Anthropic. It auto-starts the proxy if it isn't already running.
+The three-part solution replaces the single-session CLI with persistent, remotely-controllable, multi-model workflows:
 
+### 1. Global commands (any directory)
+
+First-time setup:
 ```bash
-./scripts/claude-nim.sh              # fresh session, default model (glm-5.1)
-./scripts/claude-nim.sh gpt-oss      # fresh session on gpt-oss-120b
-./scripts/claude-nim.sh kimi --continue          # continue last conversation in this dir, now on kimi-k2.6
-./scripts/claude-nim.sh deepseek --resume <id>   # resume a specific session on deepseek-v4-pro
+cd /path/to/nim-self-verifying-agent
+./scripts/install.sh    # symlinks cc-up, cc-remote, cc-switch into ~/.local/bin
 ```
 
-Model shortcuts to NIM endpoints (`proxy/litellm-config.yaml`):
+Then from any directory:
+```bash
+cc-up demo glm                  # start persistent session "demo" on glm-5.1
+cc-remote demo                  # expose that session over ttyd on Tailscale (same terminal, attach to the ttyd URL from your phone/laptop)
+cc-switch demo kimi             # (in another terminal) switch that session to kimi without losing context
+```
+
+### 2. Slash commands (inside a running `cc-up` session)
+
+Once you have a Claude session running (via `cc-up`), use these slash commands *within that session itself* (not needing a separate terminal):
+
+- **`/cc-switch kimi`** — Write your handoff summary naturally as your response, then this command relaunches your pane on the new model with `--continue` (full transcript replay). The switch happens ~1 second after you run it.
+- **`/cc-remote [port]`** — Expose this session over ttyd on Tailscale in the background. The pane stays open, you get the URL to open on another device.
+
+### 3. Model shortcuts
+
+All available on NIM (`proxy/litellm-config.yaml`):
 
 | Shortcut            | NIM model                  |
 | -------------------- | --------------------------- |
@@ -22,19 +39,15 @@ Model shortcuts to NIM endpoints (`proxy/litellm-config.yaml`):
 | `kimi`               | `moonshotai/kimi-k2.6`      |
 | `gpt-oss`            | `openai/gpt-oss-120b`       |
 
-**Setup global alias (one-time):**
+Or pass any raw `litellm` model name: `cc-up work my-custom-endpoint-alias`.
 
-```bash
-echo "alias claude-nim='/path/to/your/repo/nim-self-verifying-agent/scripts/claude-nim.sh'" >> ~/.bashrc
-source ~/.bashrc
-```
+### What's different from the old single-session CLI
 
-Then from any repo: 
-```bash
-claude-nim gpt-oss --continue
-```
-
-**Note:** `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL` are read once at process startup. To switch models mid-conversation, exit and relaunch with `--continue` or `--resume`, which replays the history into the new process.
+| Old (`claude-nim.sh`) | New (`cc-up` + `/cc-switch`) |
+|---|---|
+| Exits on disconnect → lose conversation | Persists in tmux → survives SSH drops, terminal closes |
+| To switch models: exit + relaunch (context replayed) | Switch models mid-conversation with `/cc-switch`, context preserved |
+| Only you can see/control the session | `/cc-remote` exposes it over Tailscale → control from phone/laptop |
 
 ## Overview
 
@@ -49,6 +62,24 @@ This project explores:
 1. **No SDK fork.** The endpoint is swapped via environment variables; verification is injected via hooks. Both are sanctioned, supported extensions.
 2. **Translation proxy required.** The Claude Agent SDK speaks the Anthropic Messages API; NVIDIA NIM speaks OpenAI. A proxy (LiteLLM or custom) translates between them.
 3. **Hooks enforce verification deterministically.** Unlike system prompts (advisory), `PostToolUse` hooks guarantee that code is linted/typed/tested before the model sees it.
+
+## Agent hardening (safety guardrails)
+
+The headless agent runs in a Docker container with git credentials and can execute arbitrary Bash commands. Three layers prevent misuse:
+
+1. **Denylist (PreToolUse hook)** — Blocks destructive Bash commands at execution time:
+   - Credential theft: `cat ~/.ssh/id_rsa`, `.aws/credentials`, `/etc/shadow`
+   - Filesystem destruction: `rm -rf /`, `mkfs`, `dd of=/dev`, fork bombs
+   - SCM sabotage: `git push --force`, `git reset --hard`
+   - Code injection: `curl | bash`
+   
+   Failures feed back to the agent as permission denials, not silent blocks.
+
+2. **Path confinement (PreToolUse hook)** — Write/Edit/MultiEdit/NotebookEdit tools can only write to files inside the project root (`AGENT_CWD`). Prevents escaping `/workspace` to clobber system files or credentials.
+
+3. **Proxy preflight (startup check)** — If the NIM proxy is unreachable, the agent fails loudly with a clear error message instead of hanging or timing out opaquely.
+
+All hooks are deterministic (no AI-in-the-loop decisions) and fire regardless of `permissionMode` setting, making them the true backstop for an agent that otherwise has `bypassPermissions` + git credentials.
 
 ## Repo layout
 
