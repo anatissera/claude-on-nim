@@ -142,6 +142,76 @@ else
   ok "committed template holds no real key"
 fi
 
+# --- management API wiring ---------------------------------------------------
+
+result="$(render_with 'NVIDIA_NIM_API_KEY=nvapi-one
+PROXY_MASTER_KEY=sk-master
+MANAGEMENT_SECRET_KEY=mgmt-secret-value')"
+rest="${result#*|}"; out="${rest%%|*}"; dir="${rest#*|}"
+assert_contains "substitutes the management secret" "$(cat "$out")" 'secret-key: "mgmt-secret-value"'
+assert_contains "reports the API as enabled" "$(cat "$dir/stderr")" "Management API enabled"
+
+result="$(render_with 'NVIDIA_NIM_API_KEY=nvapi-one
+PROXY_MASTER_KEY=sk-master')"
+rest="${result#*|}"; out="${rest%%|*}"; dir="${rest#*|}"
+assert_contains "leaves the secret empty when unset" "$(cat "$out")" 'secret-key: ""'
+assert_contains "reports the API as disabled" "$(cat "$dir/stderr")" "Management API disabled"
+
+result="$(render_with 'NVIDIA_NIM_API_KEY=nvapi-one
+PROXY_MASTER_KEY=sk-master
+MANAGEMENT_SECRET_KEY=mgmt-secret')"
+rest="${result#*|}"; out="${rest%%|*}"
+if python3 -c "
+import yaml
+cfg = yaml.safe_load(open('$out'))
+rm = cfg['remote-management']
+assert rm['secret-key'] == 'mgmt-secret', rm['secret-key']
+assert rm['allow-remote'] is True, rm['allow-remote']
+assert rm['disable-control-panel'] is True, rm['disable-control-panel']
+assert cfg['usage-statistics-enabled'] is True
+" 2>/dev/null; then
+  ok "management block renders with the expected shape"
+else
+  bad "management block renders with the expected shape"
+fi
+
+# Security invariant: the proxy holds the NIM key and, with allow-remote true,
+# serves an API that can rewrite its own config. The loopback bind is what
+# keeps both off the network, so it must not quietly become 0.0.0.0 again.
+compose="$(cat "$REPO_DIR/docker-compose.yml")"
+if grep -qE '^\s*-\s*"127\.0\.0\.1:8317:8317"' <<<"$compose"; then
+  ok "proxy port is published on loopback only"
+else
+  bad "proxy port is published on loopback only" "found: $(grep -E '8317:8317' <<<"$compose" | tr -d ' ')"
+fi
+if grep -qE '^\s*-\s*"8317:8317"' <<<"$compose"; then
+  bad "no bare 0.0.0.0 port publish remains"
+else
+  ok "no bare 0.0.0.0 port publish remains"
+fi
+
+echo
+echo "cpa-admin.sh"
+
+admindir="$(mktemp -d "$TMPROOT/admin.XXXXXX")"
+printf 'PROXY_MASTER_KEY=sk-master\n' > "$admindir/.env"
+adminout="$(CLIPROXY_ENV_FILE="$admindir/.env" "$REPO_DIR/scripts/cpa-admin.sh" status 2>&1)"
+admincode=$?
+assert_eq "refuses to run without a management secret" "$admincode" "1"
+assert_contains "explains how to enable the API" "$adminout" "MANAGEMENT_SECRET_KEY"
+assert_contains "names the command to generate one" "$adminout" "openssl rand"
+
+printf 'PROXY_MASTER_KEY=sk-master\nMANAGEMENT_SECRET_KEY=irrelevant\n' > "$admindir/.env"
+adminout="$(CLIPROXY_ENV_FILE="$admindir/.env" CPA_ADMIN_URL="http://127.0.0.1:1" \
+  "$REPO_DIR/scripts/cpa-admin.sh" status 2>&1)"
+assert_contains "reports an unreachable proxy rather than hanging" "$adminout" "NOT RESPONDING"
+
+adminout="$(CLIPROXY_ENV_FILE="$admindir/.env" "$REPO_DIR/scripts/cpa-admin.sh" nonsense 2>&1)"
+assert_contains "rejects an unknown subcommand" "$adminout" "Unknown command"
+
+adminout="$(CLIPROXY_ENV_FILE="$admindir/.env" "$REPO_DIR/scripts/cpa-admin.sh" --help 2>&1)"
+assert_contains "prints usage for --help" "$adminout" "cpa-admin.sh status"
+
 echo
 echo "claude-nim.sh model shortcuts"
 
@@ -182,6 +252,33 @@ for pair in "sonnet:claude-sonnet-4-6" "opus:claude-opus-4-8" "haiku:claude-haik
     bad "$word and $tier resolve to the same upstream" "got '$a' vs '$b'"
   fi
 done
+
+echo
+echo "validate-proxy.sh target resolution"
+
+resolve_target() {
+  ( set +u
+    unset PROXY_URL
+    ANTHROPIC_BASE_URL="$1"
+    [[ -n "${2:-}" ]] && PROXY_URL="$2"
+    block="$(sed -n '/^# ANTHROPIC_BASE_URL is written for the agent container/,/^fi$/p' \
+      "$REPO_DIR/scripts/validate-proxy.sh")"
+    eval "$block" 2>/dev/null
+    echo "$PROXY_URL" )
+}
+
+assert_eq "a compose service name maps to the published port" \
+  "$(resolve_target 'http://cliproxy:8317')" "http://localhost:8317"
+assert_eq "the removed litellm service name also maps cleanly" \
+  "$(resolve_target 'http://proxy:4000')" "http://localhost:8317"
+assert_eq "an unset base URL defaults to the published port" \
+  "$(resolve_target '')" "http://localhost:8317"
+assert_eq "a loopback base URL is kept as-is" \
+  "$(resolve_target 'http://localhost:8317')" "http://localhost:8317"
+assert_eq "127.0.0.1 is kept as-is" \
+  "$(resolve_target 'http://127.0.0.1:9999')" "http://127.0.0.1:9999"
+assert_eq "an explicit PROXY_URL wins over everything" \
+  "$(resolve_target 'http://cliproxy:8317' 'http://elsewhere:1234')" "http://elsewhere:1234"
 
 echo
 echo "script hygiene"

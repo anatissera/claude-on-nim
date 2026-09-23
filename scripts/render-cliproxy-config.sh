@@ -74,9 +74,18 @@ for key in "${nim_keys[@]}"; do
 done
 entries="${entries%$'\n'}"
 
+# Optional: empty leaves the Management API fully disabled (404 everywhere),
+# which is the right default for a proxy that can rewrite its own config and
+# serve request logs.
+management_secret="${MANAGEMENT_SECRET_KEY:-}"
+if placeholder_or_empty "$management_secret"; then
+  management_secret=""
+fi
+
 rendered="$(cat "$TEMPLATE")"
 rendered="${rendered//\$\{NIM_API_KEY_ENTRIES\}/$entries}"
 rendered="${rendered//\$\{PROXY_MASTER_KEY\}/$PROXY_MASTER_KEY}"
+rendered="${rendered//\$\{MANAGEMENT_SECRET_KEY\}/$management_secret}"
 
 # The template mentions $NVIDIA_NIM_API_KEY inside a shell snippet in a comment,
 # which is intentionally left as-is; only dollar-brace markers are substituted.
@@ -92,4 +101,10 @@ if (( ${#nim_keys[@]} > 1 )); then
 else
   echo "INFO: wrote $OUTPUT (0600, gitignored) with 1 NIM key." >&2
   echo "INFO: add NVIDIA_NIM_API_KEY_2 to $ENV_FILE to start rotating across a pool." >&2
+fi
+
+if [[ -n "$management_secret" ]]; then
+  echo "INFO: Management API enabled on localhost only. Try: ./scripts/cpa-admin.sh status" >&2
+else
+  echo "INFO: Management API disabled. Set MANAGEMENT_SECRET_KEY in $ENV_FILE to enable it." >&2
 fi

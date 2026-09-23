@@ -38,11 +38,32 @@ logs-max-total-size-mb: 512
 error-logs-max-files: 20
 
 remote-management:
-  # With no secret-key set, every /v0/management route already returns 404, so
-  # fetching the control panel asset is wasted work -- and the container runs as
-  # a non-root user that cannot create /CLIProxyAPI/static anyway, which turns
-  # the attempt into a startup warning. Phase 4 revisits this.
+  # Opt-in. Empty means every /v0/management route returns 404 -- set
+  # MANAGEMENT_SECRET_KEY in .env to turn the API on. CPA bcrypt-hashes a
+  # plaintext value on startup and rewrites this file in place with the hash
+  # (os.Create, so the bind mount survives); re-rendering puts plaintext back
+  # and it gets re-hashed on the next start. Harmless, just expect the churn.
+  secret-key: "${MANAGEMENT_SECRET_KEY}"
+
+  # Reads as alarming, and would be if the port were public -- but it is not.
+  # CPA classifies a request as local by peer IP, and behind Docker every host
+  # request arrives from the bridge gateway (172.18.0.1), so its own localhost
+  # check can never pass and the API would be unreachable from the host at all.
+  # docker-compose.yml therefore publishes the port on 127.0.0.1 only, and that
+  # binding is the access control: nothing off-host can open the socket, and
+  # the bcrypt secret-key is still required on top.
+  # If you ever publish this port more widely, set this back to false.
+  allow-remote: true
+
+  # The bundled web panel is fetched from GitHub at runtime and needs a
+  # writable /CLIProxyAPI/static, which the non-root container user does not
+  # have. scripts/cpa-admin.sh covers the same ground over the API; enable this
+  # (and mount a static dir) only if you specifically want the UI.
   disable-control-panel: true
+
+# Aggregates per-key and per-model usage in memory. Only worth paying for now
+# that the Management API can read it back -- see `cpa-admin.sh usage`.
+usage-statistics-enabled: true
 
 # How a credential is picked when several match. Only meaningful once the key
 # pool below has more than one entry, but setting it now means adding a key is
@@ -112,8 +133,8 @@ ${NIM_API_KEY_ENTRIES}
     # bottom for where pooling does make sense.
     models:
       # Aliases matched against real Claude model names, so the SDK's own
-      # assumptions about model identity keep holding. These mirror
-      # proxy/litellm-config.yaml tier-for-tier.
+      # assumptions about model identity keep holding. The sonnet/opus/haiku
+      # shortcut words in scripts/claude-nim.sh resolve to these same upstreams.
       - name: "z-ai/glm-5.3"
         alias: "claude-sonnet-4-6"
       - name: "moonshotai/kimi-k3"
