@@ -6,6 +6,12 @@
 # `os.environ/VAR` equivalent, so the keys have to be literal in the file. The
 # rendered output is gitignored for that reason -- treat it like .env.
 #
+# Multiple NIM keys: set NVIDIA_NIM_API_KEY plus NVIDIA_NIM_API_KEY_2,
+# NVIDIA_NIM_API_KEY_3, ... in .env. Each becomes an api-key-entries item that
+# CPA rotates between per `routing.strategy`. Free NIM keys are per-account and
+# each carries its own ~40 RPM allowance and credit pool, so a second key is the
+# most direct way to raise the ceiling.
+#
 # Usage: ./scripts/render-cliproxy-config.sh
 set -euo pipefail
 
@@ -29,33 +35,59 @@ set -a
 source "$ENV_FILE"
 set +a
 
-# Only these markers are substituted. Anything else stays literal, so a stray
-# ${...} in a comment can't silently pull in an unrelated environment variable.
-REQUIRED_VARS=(NVIDIA_NIM_API_KEY PROXY_MASTER_KEY)
-
-for var in "${REQUIRED_VARS[@]}"; do
-  value="${!var:-}"
-  case "$value" in
-    ""|nvapi-replace-me|sk-replace-me)
-      echo "FAIL: set a real $var in $ENV_FILE before rendering." >&2
-      exit 1
-      ;;
+placeholder_or_empty() {
+  case "$1" in
+    ""|nvapi-replace-me|sk-replace-me) return 0 ;;
+    *) return 1 ;;
   esac
+}
+
+if placeholder_or_empty "${PROXY_MASTER_KEY:-}"; then
+  echo "FAIL: set a real PROXY_MASTER_KEY in $ENV_FILE before rendering." >&2
+  exit 1
+fi
+if placeholder_or_empty "${NVIDIA_NIM_API_KEY:-}"; then
+  echo "FAIL: set a real NVIDIA_NIM_API_KEY in $ENV_FILE before rendering." >&2
+  exit 1
+fi
+
+# Collect NVIDIA_NIM_API_KEY, then _2, _3, ... stopping at the first gap so a
+# typo'd suffix can't silently drop a key that comes after it.
+nim_keys=("$NVIDIA_NIM_API_KEY")
+index=2
+while true; do
+  var="NVIDIA_NIM_API_KEY_${index}"
+  value="${!var:-}"
+  if placeholder_or_empty "$value"; then
+    break
+  fi
+  nim_keys+=("$value")
+  index=$((index + 1))
 done
+
+# Built at the indentation the template's api-key-entries block expects.
+entries=""
+for key in "${nim_keys[@]}"; do
+  entries+="      - api-key: \"${key}\""$'\n'
+done
+entries="${entries%$'\n'}"
 
 rendered="$(cat "$TEMPLATE")"
-for var in "${REQUIRED_VARS[@]}"; do
-  # Bash replacement rather than sed, so the secret never lands in a process
-  # argument list, and so characters special to sed can't corrupt the output.
-  rendered="${rendered//\$\{$var\}/${!var}}"
-done
+rendered="${rendered//\$\{NIM_API_KEY_ENTRIES\}/$entries}"
+rendered="${rendered//\$\{PROXY_MASTER_KEY\}/$PROXY_MASTER_KEY}"
 
+# The template mentions $NVIDIA_NIM_API_KEY inside a shell snippet in a comment,
+# which is intentionally left as-is; only dollar-brace markers are substituted.
 if [[ "$rendered" == *'${'* ]]; then
-  echo "WARN: the rendered config still contains a '\${' marker -- check the template for a variable this script doesn't know about." >&2
+  echo "WARN: the rendered config still contains a '\${' marker -- check the template for a placeholder this script doesn't know about." >&2
 fi
 
 umask 077
 printf '%s\n' "$rendered" > "$OUTPUT"
 
-echo "INFO: wrote $OUTPUT (0600, gitignored)." >&2
-echo "INFO: next: docker compose up -d cliproxy && PROXY_URL=http://localhost:8317 ./scripts/validate-proxy.sh" >&2
+if (( ${#nim_keys[@]} > 1 )); then
+  echo "INFO: wrote $OUTPUT (0600, gitignored) with ${#nim_keys[@]} NIM keys in the pool." >&2
+else
+  echo "INFO: wrote $OUTPUT (0600, gitignored) with 1 NIM key." >&2
+  echo "INFO: add NVIDIA_NIM_API_KEY_2 to $ENV_FILE to start rotating across a pool." >&2
+fi
