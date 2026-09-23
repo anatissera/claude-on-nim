@@ -180,9 +180,8 @@ equivalent, so keys have to be literal in the file. That's why
 `proxy/cliproxy-config.yaml.template` is committed and the rendered
 `proxy/cliproxy-config.yaml` is gitignored — treat it like `.env`.
 
-> **Model catalog drifts.** NVIDIA retires models without notice; `z-ai/glm-5.1` reached
-> end-of-life on 2026-07-02. Verify what's live before trusting any alias:
-> `curl -H "Authorization: Bearer $NVIDIA_NIM_API_KEY" https://integrate.api.nvidia.com/v1/models`
+Its model aliases mirror `proxy/litellm-config.yaml`, so the same catalog-drift caveat
+above applies to both.
 
 ## Architecture
 
