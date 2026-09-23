@@ -1,14 +1,10 @@
-# CLIProxyAPI config template -- Phase 0 of the LiteLLM replacement.
+# CLIProxyAPI config template.
 #
 # CPA does NOT interpolate environment variables in this file (unlike LiteLLM's
 # `os.environ/VAR`); config_load.go is a plain yaml.Unmarshal. So this is a
 # template: `scripts/render-cliproxy-config.sh` substitutes the dollar-brace
 # placeholders below from .env and writes proxy/cliproxy-config.yaml, which is
 # gitignored because it holds the literal keys.
-#
-# Phase 0 intentionally mirrors proxy/litellm-config.yaml model-for-model, so
-# `PROXY_URL=http://localhost:8317 ./scripts/validate-proxy.sh` is an
-# apples-to-apples comparison against the LiteLLM path on :4000.
 
 port: 8317
 
@@ -22,49 +18,83 @@ api-keys:
 # OAuth providers, but the directory still has to be writable.
 auth-dir: "/CLIProxyAPI/auths"
 
-# NVIDIA NIM is not a native CPA provider the way it is in LiteLLM; it is reached
-# as a generic OpenAI-compatible upstream. internal/runtime/executor/openai_compat_executor.go
-# takes the request's source format (`claude` when it arrives on /v1/messages),
-# translates it to OpenAI, POSTs {base-url}/chat/completions, and translates the
-# response back -- streaming and tool calls included. That is exactly the role
-# LiteLLM's `use_chat_completions_url_for_anthropic_messages: true` played.
+remote-management:
+  # With no secret-key set, every /v0/management route already returns 404, so
+  # fetching the control panel asset is wasted work -- and the container runs as
+  # a non-root user that cannot create /CLIProxyAPI/static anyway, which turns
+  # the attempt into a startup warning. Phase 4 revisits this.
+  disable-control-panel: true
+
+# How a credential is picked when several match. Only meaningful once the key
+# pool below has more than one entry, but setting it now means adding a key is
+# purely a .env change.
+routing:
+  strategy: "round-robin"
+
+# Extra credential retry rounds after the first round runs out of eligible
+# credentials. Applies to 403/408/429/500/502/503/504 -- i.e. transient upstream
+# trouble, which on NIM's free tier mostly means rate limiting.
+request-retry: 3
+# Never wait more than this long for a credential to come off cooldown.
+max-retry-interval: 30
+
 openai-compatibility:
   - name: "nvidia-nim"
     base-url: "https://integrate.api.nvidia.com/v1"
-    # Cooldown is a failover mechanism: it parks a bad credential so traffic
-    # moves to a healthy one. With a single key there is nothing to fail over
-    # to, so cooling it turns one model's error into a total outage across
-    # every model sharing the credential. Observed during the Phase 0 gate: a
-    # 404 on one model was immediately followed by 503 auth_unavailable on the
-    # next request to a different model.
-    # Phase 1 adds more keys to the pool; flip this back to false then.
-    disable-cooling: true
+
+    # NIM's two permanent per-model failures are invisible to CPA's built-in
+    # classifier: isModelSupportError only inspects 400/422/404 and matches a
+    # fixed pattern list ("model not supported", "not available for your
+    # account", ...). Neither of NIM's messages is on it, so without these rules
+    # a retired model is treated as a *credential* health problem and cools the
+    # key -- which is how, in the Phase 0 gate, a 404 on one model produced
+    # 503 auth_unavailable on the very next request to a different model.
+    #
+    # "continue" means: try the next candidate, do not cool the credential.
+    # That is the correct reading -- a retired model says nothing about whether
+    # the key is healthy.
+    request-scoped-errors:
+      # {"status":410,...,"detail":"The model 'X' has reached its end of life
+      #  on <date> and is no longer available."}
+      - status: 410
+        match:
+          - "end of life"
+        action: "continue"
+      # {"status":404,...,"detail":"Function '<uuid>': Not found for account
+      #  '<id>'"} -- returned for models that appear in GET /v1/models but are
+      # not entitled on this account.
+      - status: 404
+        match:
+          - "Not found for account"
+        action: "continue"
+
+    # Re-enabled now that the two rules above keep permanent per-model errors
+    # from being mistaken for credential ill-health. Cooling now only fires for
+    # genuine credential trouble (429, 5xx), which is what it is for.
+    disable-cooling: false
+
+    # One entry per NVIDIA_NIM_API_KEY* in .env. Adding a key is a one-line
+    # change there -- the render script expands this block.
     api-key-entries:
-      # Phase 1 adds more entries here; the pool rotates per routing.strategy.
-      - api-key: "${NVIDIA_NIM_API_KEY}"
-    # Upstream names verified against a live GET /v1/models on 2026-09-23.
-    # Three of the four models in proxy/litellm-config.yaml no longer exist:
-    # z-ai/glm-5.1 hit end-of-life on 2026-07-02, and deepseek-ai/deepseek-v4-pro
-    # and openai/gpt-oss-120b are gone from the catalog. Re-check with:
+${NIM_API_KEY_ENTRIES}
+
+    # Upstream names verified against a live GET /v1/models. NVIDIA retires
+    # models without notice; re-check with:
     #   curl -H "Authorization: Bearer $NVIDIA_NIM_API_KEY" \
     #        https://integrate.api.nvidia.com/v1/models
-    # Phase 0 gate results, measured 2026-09-23 on this account:
-    #   z-ai/glm-5.3        PASS, ~1s warm    <- the only model fast enough to
-    #                                            drive an interactive session
-    #   z-ai/glm-5.3-flash  PASS, 149-429s    <- correct tool_use, but NIM
-    #                                            cold-start makes it slow
-    #   moonshotai/kimi-k2.6  404 "Not found for account" -- listed in
-    #                         GET /v1/models but not entitled here, so it is
-    #                         NOT aliased below.
-    #   kimi-k3 / deepseek-v4.1-flash / gpt-oss-20b: cold-start bound, not
-    #                         confirmed. Left aliased so they can be warmed and
-    #                         retested, but do not rely on them yet.
-    # The latency is NVIDIA's free tier, not the proxy: glm-5.3-flash took 429s
-    # on a direct curl to integrate.api.nvidia.com with CPA out of the path.
+    #
+    # Deliberately NOT pooled. Repeating an alias across several upstream names
+    # builds a pool, but a pool *round-robins* across its healthy members rather
+    # than preferring the first. Measured on this account: a pool of
+    # [glm-5.3, glm-5.3-flash] alternated strictly -- 1s, 95s, 0s, 85s -- so
+    # pooling the fast model with a slow one would make every second interactive
+    # request take a minute and a half. Pools earn their keep when the members
+    # are interchangeable in latency; these are not. See `nim-pool` at the
+    # bottom for where pooling does make sense.
     models:
       # Aliases matched against real Claude model names, so the SDK's own
-      # assumptions about model identity keep holding (same trick as the
-      # LiteLLM config this replaces).
+      # assumptions about model identity keep holding. These mirror
+      # proxy/litellm-config.yaml tier-for-tier.
       - name: "z-ai/glm-5.3"
         alias: "claude-sonnet-4-6"
       - name: "moonshotai/kimi-k3"
@@ -72,17 +102,28 @@ openai-compatibility:
       - name: "z-ai/glm-5.3-flash"
         alias: "claude-haiku-4-5"
       # Friendly direct aliases for interactive use via scripts/claude-nim.sh.
-      # Repeating an upstream `name` under a second alias is supported --
-      # buildOpenAICompatibilityConfigModels emits one catalog entry per list
-      # item, keyed by alias.
       - name: "z-ai/glm-5.3"
         alias: "glm"
       - name: "z-ai/glm-5.3-flash"
         alias: "glm-flash"
-      # `kimi` points at k3 because k2.6 returns 404 on this account.
+      # `kimi` points at k3 because moonshotai/kimi-k2.6, while still listed in
+      # the catalog, returns 404 "Not found for account" here.
       - name: "moonshotai/kimi-k3"
         alias: "kimi"
       - name: "deepseek-ai/deepseek-v4.1-flash"
         alias: "deepseek"
       - name: "openai/gpt-oss-20b"
         alias: "gpt-oss"
+
+      # Opt-in pool for unattended work, where finishing matters more than
+      # latency. A member that fails is suspended and skipped on later
+      # requests, so a model going end-of-life costs one failed attempt rather
+      # than a dead alias -- verified by pointing a pool at a retired model and
+      # watching four consecutive requests succeed on the survivor.
+      # Do not point an interactive session at this; use `glm` for that.
+      - name: "z-ai/glm-5.3"
+        alias: "nim-pool"
+      - name: "moonshotai/kimi-k3"
+        alias: "nim-pool"
+      - name: "deepseek-ai/deepseek-v4.1-flash"
+        alias: "nim-pool"

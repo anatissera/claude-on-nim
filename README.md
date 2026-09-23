@@ -183,6 +183,17 @@ equivalent, so keys have to be literal in the file. That's why
 Its model aliases mirror `proxy/litellm-config.yaml`, so the same catalog-drift caveat
 above applies to both.
 
+**Raising the rate-limit ceiling.** Each free NIM key carries its own ~40 RPM allowance and
+credit pool. Add `NVIDIA_NIM_API_KEY_2` (then `_3`, …) to `.env`, re-render, and
+CLIProxyAPI rotates across them round-robin — no config edit needed.
+
+**`nim-pool`.** An alias backed by several upstream models at once, for unattended work
+where finishing matters more than latency. A member that fails gets suspended and skipped
+on later requests, so a model reaching end-of-life costs one failed attempt instead of a
+dead alias. Don't point an interactive session at it: a pool *round-robins* across its
+healthy members, so with NIM's uneven latency every second request lands on a slow model.
+Use `glm` for interactive work.
+
 ## Architecture
 
 ### Endpoint redirection

@@ -40,6 +40,11 @@ services:
     # explicitly -- unlike the litellm service above, where command: is appended
     # to an entrypoint.
     command: ["./CLIProxyAPI", "--config", "/CLIProxyAPI/config.yaml"]
+    # CPA runs as root in the image and writes cooldown state and logs into the
+    # mounted auth-dir, which leaves root-owned files on the host that a normal
+    # user then can't clean up. Same reason agent/entrypoint.sh drops to
+    # HOST_UID/HOST_GID via gosu.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:
       # Rendered by scripts/render-cliproxy-config.sh -- CPA has no env-var
       # interpolation, so the keys are literal in this file. Read-write rather
