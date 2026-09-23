@@ -187,6 +187,25 @@ above applies to both.
 credit pool. Add `NVIDIA_NIM_API_KEY_2` (then `_3`, …) to `.env`, re-render, and
 CLIProxyAPI rotates across them round-robin — no config edit needed.
 
+**Request logs.** `proxy/logs/` gets one file per request, pairing what the client sent
+with what went upstream, plus both responses and token counts — so you can read the
+Anthropic→OpenAI translation instead of guessing at it:
+
+```
+Body:  {"model":"claude-sonnet-4-6","tools":[{"name":"get_weather","input_schema":{...}}]}
+Upstream URL: https://integrate.api.nvidia.com/v1/chat/completions
+Body:  {"model":"z-ai/glm-5.3","tools":[{"type":"function","function":{"parameters":{...}}}]}
+```
+
+Credentials are masked, but prompts and replies are written verbatim — the directory is
+gitignored, treat it as sensitive. Old files are deleted once the directory passes
+`logs-max-total-size-mb`.
+
+> **GLM's reasoning counts against `max_tokens`.** The logs make this visible: with
+> `max_tokens: 24`, `glm-5.3` spent all 24 on `reasoning_content` and returned
+> `finish_reason: "length"` with *no* tool call. Give reasoning models room, or they look
+> like they can't call tools at all.
+
 **`nim-pool`.** An alias backed by several upstream models at once, for unattended work
 where finishing matters more than latency. A member that fails gets suspended and skipped
 on later requests, so a model reaching end-of-life costs one failed attempt instead of a

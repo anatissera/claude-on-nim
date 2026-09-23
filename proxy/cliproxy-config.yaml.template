@@ -18,6 +18,25 @@ api-keys:
 # OAuth providers, but the directory still has to be writable.
 auth-dir: "/CLIProxyAPI/auths"
 
+# Request logging. Each entry pairs what the client sent us with what we sent
+# upstream, and both responses, with headers and timestamps -- so when a model
+# mishandles a tool call you can read the Anthropic->OpenAI translation instead
+# of guessing at it. That is the concrete answer to the PRD's risk #2, which
+# names protocol-translation fidelity as where most debugging time goes.
+#
+# It also records per-request token usage, which is how to watch NIM credit
+# burn without standing up the Management API.
+#
+# Credentials are masked (Authorization, X-Api-Key and the auth fingerprint all
+# come out redacted -- verified), but bodies are written verbatim, so
+# proxy/logs/ still holds your prompts and the model's replies. It is
+# gitignored; treat it as sensitive.
+request-log: true
+# Delete the oldest logs once the directory exceeds this. Without a cap, a
+# long unattended agent run will happily fill the disk.
+logs-max-total-size-mb: 512
+error-logs-max-files: 20
+
 remote-management:
   # With no secret-key set, every /v0/management route already returns 404, so
   # fetching the control panel asset is wasted work -- and the container runs as

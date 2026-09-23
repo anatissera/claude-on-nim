@@ -10,6 +10,9 @@ dist/
 proxy/cliproxy-config.yaml
 # CPA per-credential state (cooldown files, tokens).
 proxy/auths/
+# Request logs hold full prompt and response bodies — treat as sensitive.
+proxy/logs/*
+!proxy/logs/.gitkeep
 
 # Target repo the agent edits — mounted, not part of this repo.
 workspace/*

@@ -14,5 +14,10 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests are run from src by vitest and have no business in dist: emitting
+  // them meant every suite ran twice (once from src, once from the compiled
+  // copy), so a stale dist/ build could pass while src/ was broken -- and the
+  // test files were being shipped inside the agent image.
+  "exclude": ["src/**/*.test.ts"]
 }
