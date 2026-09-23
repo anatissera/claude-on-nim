@@ -31,6 +31,10 @@ fi
 # it already has its own .claude/ config (never clobber an existing target repo).
 if [ -d /workspace ] && [ ! -d /workspace/.claude ]; then
   cp -r /app/claude-template /workspace/.claude
+  # This runs as root, before the gosu handoff below, so without the chown the
+  # seeded CLAUDE.md lands root-owned in the user's mounted workspace and they
+  # cannot edit their own agent instructions without sudo.
+  chown -R "$HOST_UID:$HOST_GID" /workspace/.claude
 fi
 
 cd /workspace

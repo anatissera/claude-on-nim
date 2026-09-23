@@ -8,8 +8,11 @@ dist/
 # scripts/render-cliproxy-config.sh. Holds literal API keys because
 # CLIProxyAPI has no env-var interpolation in its config.
 proxy/cliproxy-config.yaml
-# CPA per-credential state (cooldown files, tokens).
-proxy/auths/
+# CPA per-credential state (cooldown files, tokens). The directory itself is
+# tracked: docker-compose bind-mounts it, and Docker creates a missing host
+# path as root, which the non-root container user then cannot write to.
+proxy/auths/*
+!proxy/auths/.gitkeep
 # Request logs hold full prompt and response bodies — treat as sensitive.
 proxy/logs/*
 !proxy/logs/.gitkeep
