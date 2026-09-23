@@ -17,9 +17,11 @@ set -euo pipefail
 
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 REPO_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
-ENV_FILE="$REPO_DIR/.env"
-TEMPLATE="$REPO_DIR/proxy/cliproxy-config.yaml.template"
-OUTPUT="$REPO_DIR/proxy/cliproxy-config.yaml"
+# Overridable so the script can be exercised against a throwaway env file and
+# output path (see scripts/test-scripts.sh) without touching the real ones.
+ENV_FILE="${CLIPROXY_ENV_FILE:-$REPO_DIR/.env}"
+TEMPLATE="${CLIPROXY_TEMPLATE:-$REPO_DIR/proxy/cliproxy-config.yaml.template}"
+OUTPUT="${CLIPROXY_CONFIG_OUT:-$REPO_DIR/proxy/cliproxy-config.yaml}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "FAIL: $ENV_FILE not found. Copy .env.example to .env and fill it in first." >&2

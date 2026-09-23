@@ -161,6 +161,14 @@ node dist/main.js "your prompt here"
 
 Run `npm run lint && npm run typecheck && npm test` before committing.
 
+The bash side has its own suite — proxy config rendering, key-pool expansion, model
+shortcut resolution, and the agreement between the `sonnet`/`opus`/`haiku` words and the
+aliases the headless agent uses:
+
+```bash
+./scripts/test-scripts.sh
+```
+
 ## The proxy
 
 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) serves the Anthropic

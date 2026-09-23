@@ -32,23 +32,39 @@ async function exists(p: string): Promise<boolean> {
 async function run(command: string[], cwd: string, timeoutMs: number): Promise<CheckResult> {
   const name = command.join(" ");
   return new Promise((resolve) => {
-    const child = spawn(command[0], command.slice(1), { cwd, shell: false });
+    // detached puts the child in its own process group so the timeout can take
+    // down the whole tree. Without it, killing `npm test` leaves the test
+    // runner and its workers alive.
+    const child = spawn(command[0], command.slice(1), { cwd, shell: false, detached: true });
     let output = "";
+    let settled = false;
+
+    const finish = (result: CheckResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      output += "\n[verification timed out]";
+      // Kill the group, not just the direct child: a shell wrapper's children
+      // inherit the stdout pipe, so killing only the shell leaves the pipe
+      // open and 'close' never fires.
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+      // Resolve now rather than waiting for 'close'. Anything that survives
+      // SIGKILL must not be able to stall the agent loop past its budget --
+      // timeoutMs is a wall-clock guarantee, not a hint.
+      finish({ name, passed: false, output: `${output}\n[verification timed out]` });
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => (output += chunk.toString()));
     child.stderr.on("data", (chunk) => (output += chunk.toString()));
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({ name, passed: false, output: `${output}\n${err.message}` });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ name, passed: code === 0, output });
-    });
+    child.on("error", (err) => finish({ name, passed: false, output: `${output}\n${err.message}` }));
+    child.on("close", (code) => finish({ name, passed: code === 0, output }));
   });
 }
 
