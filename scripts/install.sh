@@ -12,7 +12,7 @@ BIN_DIR="${HOME}/.local/bin"
 
 mkdir -p "$BIN_DIR"
 
-for name in claude-nim cc-up cc-remote cc-switch; do
+for name in claude-nim cc-up cc-remote cc-switch cpa-admin; do
   ln -sf "$REPO_DIR/scripts/${name}.sh" "$BIN_DIR/$name"
   echo "INFO: linked $BIN_DIR/$name -> $REPO_DIR/scripts/${name}.sh" >&2
 done

@@ -23,13 +23,33 @@ assert_missing()  { if [[ "$2" != *"$3"* ]]; then ok "$1"; else bad "$1" "expect
 
 # --- helpers ---------------------------------------------------------------
 
+# Variables the scripts under test also read from the environment. Sourcing
+# .env before running this suite is a completely normal thing to do, and it
+# used to leak in and fail five cases that were not actually broken -- the
+# render script sources the test env file, but an already-exported value
+# survives that and wins. Every invocation below is scrubbed of them.
+AMBIENT_VARS=(
+  NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_2 NVIDIA_NIM_API_KEY_3 NVIDIA_NIM_API_KEY_4
+  PROXY_MASTER_KEY MANAGEMENT_SECRET_KEY
+  ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN PROXY_URL CPA_ADMIN_URL
+  CLIPROXY_ENV_FILE CLIPROXY_TEMPLATE CLIPROXY_CONFIG_OUT
+)
+
+# Runs a command with those variables removed from its environment.
+clean_env() {
+  local args=()
+  local var
+  for var in "${AMBIENT_VARS[@]}"; do args+=(-u "$var"); done
+  env "${args[@]}" "$@"
+}
+
 # Renders the config from a throwaway env file. Echoes the output path.
 render_with() {
   local envbody="$1" out dir
   dir="$(mktemp -d "$TMPROOT/render.XXXXXX")"
   printf '%s\n' "$envbody" > "$dir/.env"
   out="$dir/config.yaml"
-  CLIPROXY_ENV_FILE="$dir/.env" CLIPROXY_CONFIG_OUT="$out" \
+  clean_env CLIPROXY_ENV_FILE="$dir/.env" CLIPROXY_CONFIG_OUT="$out" \
     "$REPO_DIR/scripts/render-cliproxy-config.sh" >"$dir/stdout" 2>"$dir/stderr"
   echo "$?|$out|$dir"
 }
@@ -66,7 +86,7 @@ result="$(render_with 'NVIDIA_NIM_API_KEY=nvapi-real')"
 assert_eq "rejects a missing master key" "${result%%|*}" "1"
 
 dir="$(mktemp -d "$TMPROOT/noenv.XXXXXX")"
-CLIPROXY_ENV_FILE="$dir/absent.env" CLIPROXY_CONFIG_OUT="$dir/out.yaml" \
+clean_env CLIPROXY_ENV_FILE="$dir/absent.env" CLIPROXY_CONFIG_OUT="$dir/out.yaml" \
   "$REPO_DIR/scripts/render-cliproxy-config.sh" >/dev/null 2>&1
 assert_eq "rejects a missing env file" "$?" "1"
 
@@ -195,21 +215,21 @@ echo "cpa-admin.sh"
 
 admindir="$(mktemp -d "$TMPROOT/admin.XXXXXX")"
 printf 'PROXY_MASTER_KEY=sk-master\n' > "$admindir/.env"
-adminout="$(CLIPROXY_ENV_FILE="$admindir/.env" "$REPO_DIR/scripts/cpa-admin.sh" status 2>&1)"
+adminout="$(clean_env CLIPROXY_ENV_FILE="$admindir/.env" "$REPO_DIR/scripts/cpa-admin.sh" status 2>&1)"
 admincode=$?
 assert_eq "refuses to run without a management secret" "$admincode" "1"
 assert_contains "explains how to enable the API" "$adminout" "MANAGEMENT_SECRET_KEY"
 assert_contains "names the command to generate one" "$adminout" "openssl rand"
 
 printf 'PROXY_MASTER_KEY=sk-master\nMANAGEMENT_SECRET_KEY=irrelevant\n' > "$admindir/.env"
-adminout="$(CLIPROXY_ENV_FILE="$admindir/.env" CPA_ADMIN_URL="http://127.0.0.1:1" \
+adminout="$(clean_env CLIPROXY_ENV_FILE="$admindir/.env" CPA_ADMIN_URL="http://127.0.0.1:1" \
   "$REPO_DIR/scripts/cpa-admin.sh" status 2>&1)"
 assert_contains "reports an unreachable proxy rather than hanging" "$adminout" "NOT RESPONDING"
 
-adminout="$(CLIPROXY_ENV_FILE="$admindir/.env" "$REPO_DIR/scripts/cpa-admin.sh" nonsense 2>&1)"
+adminout="$(clean_env CLIPROXY_ENV_FILE="$admindir/.env" "$REPO_DIR/scripts/cpa-admin.sh" nonsense 2>&1)"
 assert_contains "rejects an unknown subcommand" "$adminout" "Unknown command"
 
-adminout="$(CLIPROXY_ENV_FILE="$admindir/.env" "$REPO_DIR/scripts/cpa-admin.sh" --help 2>&1)"
+adminout="$(clean_env CLIPROXY_ENV_FILE="$admindir/.env" "$REPO_DIR/scripts/cpa-admin.sh" --help 2>&1)"
 assert_contains "prints usage for --help" "$adminout" "cpa-admin.sh status"
 
 echo
@@ -279,6 +299,56 @@ assert_eq "127.0.0.1 is kept as-is" \
   "$(resolve_target 'http://127.0.0.1:9999')" "http://127.0.0.1:9999"
 assert_eq "an explicit PROXY_URL wins over everything" \
   "$(resolve_target 'http://cliproxy:8317' 'http://elsewhere:1234')" "http://elsewhere:1234"
+
+echo
+echo "fresh-checkout invariants"
+
+# Docker creates a missing bind-mount host path as root, and the container runs
+# as HOST_UID -- so a directory that only exists because someone ran the stack
+# once is unwritable on a fresh clone. Both of these must be in the checkout.
+for keep in proxy/auths/.gitkeep proxy/logs/.gitkeep; do
+  if git -C "$REPO_DIR" ls-files --error-unmatch "$keep" >/dev/null 2>&1; then
+    ok "$keep is tracked"
+  else
+    bad "$keep is tracked" "Docker would create the parent as root"
+  fi
+done
+
+# Every mounted host path in compose should exist in the checkout.
+while read -r hostpath; do
+  [[ "$hostpath" == ./* ]] || continue
+  target="${hostpath#./}"
+  # The rendered config is generated, not checked in.
+  [[ "$target" == "proxy/cliproxy-config.yaml" ]] && continue
+  if [[ -e "$REPO_DIR/$target" ]]; then
+    ok "compose mount $target exists in the checkout"
+  else
+    bad "compose mount $target exists in the checkout" "Docker will create it as root"
+  fi
+done < <(grep -oE '^\s*-\s*\./[^:]+' "$REPO_DIR/docker-compose.yml" | sed -E 's/^\s*-\s*//')
+
+if grep -q 'chown -R "\$HOST_UID:\$HOST_GID" /workspace/.claude' "$REPO_DIR/agent/entrypoint.sh"; then
+  ok "entrypoint chowns the seeded workspace template"
+else
+  bad "entrypoint chowns the seeded workspace template" \
+    "the cp runs as root before the gosu handoff, so CLAUDE.md lands root-owned"
+fi
+
+for name in claude-nim cc-up cc-remote cc-switch cpa-admin; do
+  if grep -qE "for name in .*\b$name\b" "$REPO_DIR/scripts/install.sh"; then
+    ok "install.sh links $name"
+  else
+    bad "install.sh links $name"
+  fi
+done
+
+# The suite must not depend on the caller's environment: sourcing .env before
+# running it is normal and used to produce five spurious failures.
+if grep -q 'clean_env CLIPROXY_ENV_FILE' "$REPO_DIR/scripts/test-scripts.sh"; then
+  ok "test harness scrubs ambient environment variables"
+else
+  bad "test harness scrubs ambient environment variables"
+fi
 
 echo
 echo "script hygiene"
