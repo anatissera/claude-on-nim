@@ -26,7 +26,18 @@ services:
       # otherwise they would end up buried under the auth dir.
       - ./proxy/logs:/CLIProxyAPI/logs
     ports:
-      - "8317:8317"
+      # Loopback only. The agent container reaches the proxy over the compose
+      # network (http://cliproxy:8317), so the published port exists purely for
+      # host-side use -- claude-nim, validate-proxy.sh, cpa-admin.sh. Publishing
+      # it on 0.0.0.0 put a proxy holding your NIM key on every interface.
+      #
+      # This binding is also what secures the Management API. CPA's own
+      # "localhost only" check cannot work behind Docker: a request forwarded
+      # from the host arrives with the bridge gateway's IP (172.18.0.1), which
+      # it correctly refuses to treat as local. So allow-remote is true in the
+      # config and the loopback bind does the gating instead -- narrower than
+      # what CPA could enforce by itself here, and still behind the bcrypt key.
+      - "127.0.0.1:8317:8317"
     healthcheck:
       # The image is a bare debian:bookworm -- no curl, wget or python3 -- but it
       # does ship bash, so /dev/tcp gives a real HTTP check rather than a

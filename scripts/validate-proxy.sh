@@ -14,13 +14,20 @@ if [[ -z "$AUTH_TOKEN" ]]; then
   exit 1
 fi
 
+# ANTHROPIC_BASE_URL is written for the agent container, where the proxy is a
+# compose service name. From the host that name does not resolve, so anything
+# that is not a loopback address is remapped to the published port. An explicit
+# PROXY_URL always wins, for pointing at a proxy somewhere else.
 if [[ -n "${PROXY_URL:-}" ]]; then
   : # caller pinned the target explicitly
-elif [[ "${ANTHROPIC_BASE_URL:-}" == http://cliproxy:* ]]; then
-  echo "INFO: ANTHROPIC_BASE_URL points at Docker's internal service hostname; using http://localhost:8317 from the host." >&2
+elif [[ -z "${ANTHROPIC_BASE_URL:-}" ]]; then
   PROXY_URL="http://localhost:8317"
+elif [[ "${ANTHROPIC_BASE_URL}" =~ ^https?://(localhost|127\.0\.0\.1|\[::1\])(:|/|$) ]]; then
+  PROXY_URL="${ANTHROPIC_BASE_URL}"
 else
-  PROXY_URL="${ANTHROPIC_BASE_URL:-http://localhost:8317}"
+  echo "INFO: ANTHROPIC_BASE_URL (${ANTHROPIC_BASE_URL}) is a container-internal address; using http://localhost:8317 from the host." >&2
+  echo "      Set PROXY_URL to override." >&2
+  PROXY_URL="http://localhost:8317"
 fi
 
 TEXT_RESPONSE="${TMPDIR:-/tmp}/proxy-text-response.json"

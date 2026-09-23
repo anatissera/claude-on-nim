@@ -213,6 +213,30 @@ gitignored, treat it as sensitive. Old files are deleted once the directory pass
 > `finish_reason: "length"` with *no* tool call. Give reasoning models room, or they look
 > like they can't call tools at all.
 
+**Management API.** Optional, off by default. Set `MANAGEMENT_SECRET_KEY` in `.env`
+(`openssl rand -hex 32`), re-render, restart — then inspect and adjust the running proxy
+without touching the container:
+
+```bash
+./scripts/cpa-admin.sh status     # provider, key pool, aliases, error rules, routing
+./scripts/cpa-admin.sh keys       # NIM keys in the pool, masked
+./scripts/cpa-admin.sh usage      # per-key / per-model counters
+./scripts/cpa-admin.sh logs 10    # recent request logs
+./scripts/cpa-admin.sh log <name> # read one, credentials re-masked
+./scripts/cpa-admin.sh debug on   # flip upstream debug logging live
+```
+
+The proxy port is published on `127.0.0.1` only. That matters more than it looks:
+CPA decides "is this local?" by peer IP, and behind Docker every host request arrives
+from the bridge gateway, so its own localhost check can never pass. The config therefore
+sets `allow-remote: true` and the **loopback bind is what does the gating** — nothing
+off-host can open the socket, and the bcrypt-hashed key is still required on top. If you
+ever publish the port more widely, set `allow-remote` back to `false`.
+
+> CPA rewrites the rendered config in place on startup to replace your plaintext key with
+> its bcrypt hash. Comments and file mode survive. Re-rendering puts plaintext back and it
+> gets re-hashed next start — harmless churn, not a bug.
+
 **`nim-pool`.** An alias backed by several upstream models at once, for unattended work
 where finishing matters more than latency. A member that fails gets suspended and skipped
 on later requests, so a model reaching end-of-life costs one failed attempt instead of a
