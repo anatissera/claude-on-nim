@@ -4,6 +4,13 @@ dist/
 .env
 .DS_Store
 
+# Rendered from proxy/cliproxy-config.yaml.template by
+# scripts/render-cliproxy-config.sh. Holds literal API keys because
+# CLIProxyAPI has no env-var interpolation in its config.
+proxy/cliproxy-config.yaml
+# CPA per-credential state (cooldown files, tokens).
+proxy/auths/
+
 # Target repo the agent edits — mounted, not part of this repo.
 workspace/*
 !workspace/.gitkeep

@@ -161,6 +161,28 @@ node dist/main.js "your prompt here"
 
 Run `npm run lint && npm run typecheck && npm test` before committing.
 
+## Experimental: CLIProxyAPI as a LiteLLM replacement
+
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) speaks the same Anthropic
+`/v1/messages` surface and reaches NIM as a generic OpenAI-compatible upstream, so it can
+take over the proxy role — bringing multi-key pooling, per-credential cooldown, retry
+rounds and request logging that LiteLLM's config can't express. It runs on port 8317
+alongside the existing proxy on 4000, so switching back is one env var.
+
+```bash
+./scripts/render-cliproxy-config.sh        # renders the template using .env
+docker compose up -d cliproxy
+PROXY_URL=http://localhost:8317 ./scripts/validate-proxy.sh claude-sonnet-4-6
+```
+
+CLIProxyAPI parses its config with a plain YAML unmarshal and has no `os.environ/VAR`
+equivalent, so keys have to be literal in the file. That's why
+`proxy/cliproxy-config.yaml.template` is committed and the rendered
+`proxy/cliproxy-config.yaml` is gitignored — treat it like `.env`.
+
+Its model aliases mirror `proxy/litellm-config.yaml`, so the same catalog-drift caveat
+above applies to both.
+
 ## Architecture
 
 ### Endpoint redirection
