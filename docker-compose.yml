@@ -52,6 +52,10 @@ services:
       # plaintext management secret.
       - ./proxy/cliproxy-config.yaml:/CLIProxyAPI/config.yaml
       - ./proxy/auths:/CLIProxyAPI/auths
+      # Request logs land here. ResolveLogDirectory prefers ./logs relative to
+      # the working directory when it is writable, which this mount makes it --
+      # otherwise they would end up buried under the auth dir.
+      - ./proxy/logs:/CLIProxyAPI/logs
     ports:
       - "8317:8317"
     healthcheck:
