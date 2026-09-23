@@ -1,0 +1,169 @@
+# CLIProxyAPI config template.
+#
+# CPA does NOT interpolate environment variables in this file (unlike LiteLLM's
+# `os.environ/VAR`); config_load.go is a plain yaml.Unmarshal. So this is a
+# template: `scripts/render-cliproxy-config.sh` substitutes the dollar-brace
+# placeholders below from .env and writes proxy/cliproxy-config.yaml, which is
+# gitignored because it holds the literal keys.
+
+port: 8317
+
+# Bearer key the agent and the interactive CLI use to authenticate to the proxy.
+# Same value LiteLLM took as `general_settings.master_key`, so ANTHROPIC_AUTH_TOKEN
+# does not change between the two proxies during the migration.
+api-keys:
+  - "${PROXY_MASTER_KEY}"
+
+# CPA writes per-credential state here (cooldown files, OAuth tokens). We use no
+# OAuth providers, but the directory still has to be writable.
+auth-dir: "/CLIProxyAPI/auths"
+
+# Request logging. Each entry pairs what the client sent us with what we sent
+# upstream, and both responses, with headers and timestamps -- so when a model
+# mishandles a tool call you can read the Anthropic->OpenAI translation instead
+# of guessing at it. That is the concrete answer to the PRD's risk #2, which
+# names protocol-translation fidelity as where most debugging time goes.
+#
+# It also records per-request token usage, which is how to watch NIM credit
+# burn without standing up the Management API.
+#
+# Credentials are masked (Authorization, X-Api-Key and the auth fingerprint all
+# come out redacted -- verified), but bodies are written verbatim, so
+# proxy/logs/ still holds your prompts and the model's replies. It is
+# gitignored; treat it as sensitive.
+request-log: true
+# Delete the oldest logs once the directory exceeds this. Without a cap, a
+# long unattended agent run will happily fill the disk.
+logs-max-total-size-mb: 512
+error-logs-max-files: 20
+
+remote-management:
+  # Opt-in. Empty means every /v0/management route returns 404 -- set
+  # MANAGEMENT_SECRET_KEY in .env to turn the API on. CPA bcrypt-hashes a
+  # plaintext value on startup and rewrites this file in place with the hash
+  # (os.Create, so the bind mount survives); re-rendering puts plaintext back
+  # and it gets re-hashed on the next start. Harmless, just expect the churn.
+  secret-key: "${MANAGEMENT_SECRET_KEY}"
+
+  # Reads as alarming, and would be if the port were public -- but it is not.
+  # CPA classifies a request as local by peer IP, and behind Docker every host
+  # request arrives from the bridge gateway (172.18.0.1), so its own localhost
+  # check can never pass and the API would be unreachable from the host at all.
+  # docker-compose.yml therefore publishes the port on 127.0.0.1 only, and that
+  # binding is the access control: nothing off-host can open the socket, and
+  # the bcrypt secret-key is still required on top.
+  # If you ever publish this port more widely, set this back to false.
+  allow-remote: true
+
+  # The bundled web panel is fetched from GitHub at runtime and needs a
+  # writable /CLIProxyAPI/static, which the non-root container user does not
+  # have. scripts/cpa-admin.sh covers the same ground over the API; enable this
+  # (and mount a static dir) only if you specifically want the UI.
+  disable-control-panel: true
+
+# Aggregates per-key and per-model usage in memory. Only worth paying for now
+# that the Management API can read it back -- see `cpa-admin.sh usage`.
+usage-statistics-enabled: true
+
+# How a credential is picked when several match. Only meaningful once the key
+# pool below has more than one entry, but setting it now means adding a key is
+# purely a .env change.
+routing:
+  strategy: "round-robin"
+
+# Extra credential retry rounds after the first round runs out of eligible
+# credentials. Applies to 403/408/429/500/502/503/504 -- i.e. transient upstream
+# trouble, which on NIM's free tier mostly means rate limiting.
+request-retry: 3
+# Never wait more than this long for a credential to come off cooldown.
+max-retry-interval: 30
+
+openai-compatibility:
+  - name: "nvidia-nim"
+    base-url: "https://integrate.api.nvidia.com/v1"
+
+    # NIM's two permanent per-model failures are invisible to CPA's built-in
+    # classifier: isModelSupportError only inspects 400/422/404 and matches a
+    # fixed pattern list ("model not supported", "not available for your
+    # account", ...). Neither of NIM's messages is on it, so without these rules
+    # a retired model is treated as a *credential* health problem and cools the
+    # key -- which is how, in the Phase 0 gate, a 404 on one model produced
+    # 503 auth_unavailable on the very next request to a different model.
+    #
+    # "continue" means: try the next candidate, do not cool the credential.
+    # That is the correct reading -- a retired model says nothing about whether
+    # the key is healthy.
+    request-scoped-errors:
+      # {"status":410,...,"detail":"The model 'X' has reached its end of life
+      #  on <date> and is no longer available."}
+      - status: 410
+        match:
+          - "end of life"
+        action: "continue"
+      # {"status":404,...,"detail":"Function '<uuid>': Not found for account
+      #  '<id>'"} -- returned for models that appear in GET /v1/models but are
+      # not entitled on this account.
+      - status: 404
+        match:
+          - "Not found for account"
+        action: "continue"
+
+    # Re-enabled now that the two rules above keep permanent per-model errors
+    # from being mistaken for credential ill-health. Cooling now only fires for
+    # genuine credential trouble (429, 5xx), which is what it is for.
+    disable-cooling: false
+
+    # One entry per NVIDIA_NIM_API_KEY* in .env. Adding a key is a one-line
+    # change there -- the render script expands this block.
+    api-key-entries:
+${NIM_API_KEY_ENTRIES}
+
+    # Upstream names verified against a live GET /v1/models. NVIDIA retires
+    # models without notice; re-check with:
+    #   curl -H "Authorization: Bearer $NVIDIA_NIM_API_KEY" \
+    #        https://integrate.api.nvidia.com/v1/models
+    #
+    # Deliberately NOT pooled. Repeating an alias across several upstream names
+    # builds a pool, but a pool *round-robins* across its healthy members rather
+    # than preferring the first. Measured on this account: a pool of
+    # [glm-5.3, glm-5.3-flash] alternated strictly -- 1s, 95s, 0s, 85s -- so
+    # pooling the fast model with a slow one would make every second interactive
+    # request take a minute and a half. Pools earn their keep when the members
+    # are interchangeable in latency; these are not. See `nim-pool` at the
+    # bottom for where pooling does make sense.
+    models:
+      # Aliases matched against real Claude model names, so the SDK's own
+      # assumptions about model identity keep holding. The sonnet/opus/haiku
+      # shortcut words in scripts/claude-nim.sh resolve to these same upstreams.
+      - name: "z-ai/glm-5.3"
+        alias: "claude-sonnet-4-6"
+      - name: "moonshotai/kimi-k3"
+        alias: "claude-opus-4-8"
+      - name: "z-ai/glm-5.3-flash"
+        alias: "claude-haiku-4-5"
+      # Friendly direct aliases for interactive use via scripts/claude-nim.sh.
+      - name: "z-ai/glm-5.3"
+        alias: "glm"
+      - name: "z-ai/glm-5.3-flash"
+        alias: "glm-flash"
+      # `kimi` points at k3 because moonshotai/kimi-k2.6, while still listed in
+      # the catalog, returns 404 "Not found for account" here.
+      - name: "moonshotai/kimi-k3"
+        alias: "kimi"
+      - name: "deepseek-ai/deepseek-v4.1-flash"
+        alias: "deepseek"
+      - name: "openai/gpt-oss-20b"
+        alias: "gpt-oss"
+
+      # Opt-in pool for unattended work, where finishing matters more than
+      # latency. A member that fails is suspended and skipped on later
+      # requests, so a model going end-of-life costs one failed attempt rather
+      # than a dead alias -- verified by pointing a pool at a retired model and
+      # watching four consecutive requests succeed on the survivor.
+      # Do not point an interactive session at this; use `glm` for that.
+      - name: "z-ai/glm-5.3"
+        alias: "nim-pool"
+      - name: "moonshotai/kimi-k3"
+        alias: "nim-pool"
+      - name: "deepseek-ai/deepseek-v4.1-flash"
+        alias: "nim-pool"

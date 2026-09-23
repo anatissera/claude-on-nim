@@ -2,7 +2,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { config } from "./config.js";
 import { createVerifyBatchHook, createVerifyFileHook } from "./hooks/verify.js";
 import { createGuardHook } from "./hooks/guard.js";
-import { urlReachable } from "./util/net.js";
+import { describeProbeFailure, probeProxy } from "./util/net.js";
 
 const prompt = process.argv.slice(2).join(" ").trim();
 if (!prompt) {
@@ -17,12 +17,9 @@ const verifyOptions = {
 };
 
 async function main(): Promise<void> {
-  const reachable = await urlReachable(config.anthropicBaseUrl);
-  if (reachable === false) {
-    console.error(
-      `Agent run failed: NIM proxy at ${config.anthropicBaseUrl} is not reachable. ` +
-        `Check that the proxy container is up (docker compose ps) before retrying.`,
-    );
+  const probe = await probeProxy(config.anthropicBaseUrl, config.anthropicAuthToken);
+  if (!probe.ok) {
+    console.error(`Agent run failed: ${describeProbeFailure(probe, config.anthropicBaseUrl)}`);
     process.exit(1);
   }
 

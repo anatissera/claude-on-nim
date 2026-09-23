@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Step 1 of the implementation plan (PRD.md): validate the LiteLLM -> NVIDIA
-# NIM proxy speaks the Anthropic Messages protocol correctly *before* wiring
-# up the Agent SDK. Run this against a running `docker compose up proxy`.
+# Validates that the proxy speaks the Anthropic Messages protocol to NVIDIA NIM
+# correctly -- a plain-text round trip plus, more importantly, a tool-call round
+# trip, since the Agent SDK lives or dies on tool-use fidelity.
+#
+# Run it against a running `docker compose up -d cliproxy`. Override the target
+# with PROXY_URL to check a proxy on another port.
 set -euo pipefail
 
 MODEL="${1:-claude-sonnet-4-6}"
@@ -11,13 +14,20 @@ if [[ -z "$AUTH_TOKEN" ]]; then
   exit 1
 fi
 
-if [[ -n "${LITELLM_PROXY_URL:-${PROXY_URL:-}}" ]]; then
-  PROXY_URL="${LITELLM_PROXY_URL:-${PROXY_URL:-}}"
-elif [[ "${ANTHROPIC_BASE_URL:-}" == "http://proxy:4000" ]]; then
-  echo "INFO: ANTHROPIC_BASE_URL points at Docker's internal proxy hostname; using http://localhost:4000 from the host." >&2
-  PROXY_URL="http://localhost:4000"
+# ANTHROPIC_BASE_URL is written for the agent container, where the proxy is a
+# compose service name. From the host that name does not resolve, so anything
+# that is not a loopback address is remapped to the published port. An explicit
+# PROXY_URL always wins, for pointing at a proxy somewhere else.
+if [[ -n "${PROXY_URL:-}" ]]; then
+  : # caller pinned the target explicitly
+elif [[ -z "${ANTHROPIC_BASE_URL:-}" ]]; then
+  PROXY_URL="http://localhost:8317"
+elif [[ "${ANTHROPIC_BASE_URL}" =~ ^https?://(localhost|127\.0\.0\.1|\[::1\])(:|/|$) ]]; then
+  PROXY_URL="${ANTHROPIC_BASE_URL}"
 else
-  PROXY_URL="${ANTHROPIC_BASE_URL:-http://localhost:4000}"
+  echo "INFO: ANTHROPIC_BASE_URL (${ANTHROPIC_BASE_URL}) is a container-internal address; using http://localhost:8317 from the host." >&2
+  echo "      Set PROXY_URL to override." >&2
+  PROXY_URL="http://localhost:8317"
 fi
 
 TEXT_RESPONSE="${TMPDIR:-/tmp}/proxy-text-response.json"
@@ -89,6 +99,6 @@ echo
 if grep -q '"type": *"tool_use"' "$TOOL_RESPONSE"; then
   echo "PASS: proxy returned a valid Anthropic-shaped tool_use block."
 else
-  echo "FAIL: no tool_use block in the response -- check litellm logs and the model's tool-calling support." >&2
+  echo "FAIL: no tool_use block in the response -- check 'docker compose logs cliproxy' and the model's tool-calling support." >&2
   exit 1
 fi

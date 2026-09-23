@@ -1,27 +1,58 @@
 services:
-  proxy:
-    # Pinned to an explicit release, not the rolling `main-stable` tag (being
-    # deprecated 2026-06-30) and well past the malware-compromised
-    # 1.82.7/1.82.8 PyPI releases.
-    image: ghcr.io/berriai/litellm:v1.89.1
-    command: ["--config", "/app/config.yaml"]
-    environment:
-      NVIDIA_NIM_API_KEY: "${NVIDIA_NIM_API_KEY}"
-      PROXY_MASTER_KEY: "${PROXY_MASTER_KEY}"
-      LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES: "true"
+  # Translates the Anthropic Messages protocol the Agent SDK speaks into the
+  # OpenAI-compatible calls NVIDIA NIM serves. Replaced a LiteLLM service that
+  # did the same job; see the README for what the swap bought.
+  cliproxy:
+    # Pinned to a release rather than `latest`: a proxy that silently changes
+    # translation behaviour under you is the last thing you want to debug.
+    image: eceasy/cli-proxy-api:v7.3.15
+    # The image sets CMD but no ENTRYPOINT, so the binary has to be named here
+    # explicitly.
+    command: ["./CLIProxyAPI", "--config", "/CLIProxyAPI/config.yaml"]
+    # CPA runs as root in the image and writes cooldown state and logs into the
+    # mounted auth-dir, which leaves root-owned files on the host that a normal
+    # user then can't clean up. Same reason agent/entrypoint.sh drops to
+    # HOST_UID/HOST_GID via gosu.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:
-      - ./proxy/litellm-config.yaml:/app/config.yaml:ro
+      # Rendered by scripts/render-cliproxy-config.sh -- CPA has no env-var
+      # interpolation, so the keys are literal in this file. Read-write rather
+      # than :ro because CPA rewrites the config in place when it hashes a
+      # plaintext management secret.
+      - ./proxy/cliproxy-config.yaml:/CLIProxyAPI/config.yaml
+      - ./proxy/auths:/CLIProxyAPI/auths
+      # Request logs land here. ResolveLogDirectory prefers ./logs relative to
+      # the working directory when it is writable, which this mount makes it --
+      # otherwise they would end up buried under the auth dir.
+      - ./proxy/logs:/CLIProxyAPI/logs
     ports:
-      - "4000:4000"
+      # Loopback only. The agent container reaches the proxy over the compose
+      # network (http://cliproxy:8317), so the published port exists purely for
+      # host-side use -- claude-nim, validate-proxy.sh, cpa-admin.sh. Publishing
+      # it on 0.0.0.0 put a proxy holding your NIM key on every interface.
+      #
+      # This binding is also what secures the Management API. CPA's own
+      # "localhost only" check cannot work behind Docker: a request forwarded
+      # from the host arrives with the bridge gateway's IP (172.18.0.1), which
+      # it correctly refuses to treat as local. So allow-remote is true in the
+      # config and the loopback bind does the gating instead -- narrower than
+      # what CPA could enforce by itself here, and still behind the bcrypt key.
+      - "127.0.0.1:8317:8317"
     healthcheck:
-      # The litellm image ships no wget/curl; use the bundled python3 instead.
+      # The image is a bare debian:bookworm -- no curl, wget or python3 -- but it
+      # does ship bash, so /dev/tcp gives a real HTTP check rather than a
+      # decorative one. Folded block scalar (not a quoted string) so the \r\n
+      # reach printf as backslash escapes instead of being eaten by YAML.
+      # This proves the proxy answers; whether the NIM key is valid is what
+      # scripts/validate-proxy.sh tests.
       test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import sys,urllib.request as u; sys.exit(0 if u.urlopen('http://localhost:4000/health/liveliness').status==200 else 1)",
-        ]
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8317 &&
+          printf 'GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          head -n 1 <&3 | grep -q ' 200 '
       interval: 10s
       timeout: 5s
       retries: 6
@@ -29,10 +60,10 @@ services:
   agent:
     build: ./agent
     depends_on:
-      proxy:
+      cliproxy:
         condition: service_healthy
     environment:
-      ANTHROPIC_BASE_URL: "http://proxy:4000"
+      ANTHROPIC_BASE_URL: "http://cliproxy:8317"
       ANTHROPIC_AUTH_TOKEN: "${PROXY_MASTER_KEY}"
       AGENT_MODEL: "${AGENT_MODEL:-claude-sonnet-4-6}"
       AGENT_FALLBACK_MODEL: "${AGENT_FALLBACK_MODEL:-claude-haiku-4-5}"

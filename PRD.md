@@ -1,5 +1,11 @@
 # PRD: Self-Verifying Agent on NVIDIA NIM via the Claude Agent SDK
 
+> **Status (2026-09-23): superseded in part.** This is the original research document and
+> is kept as written, for the reasoning. Two findings have since changed in practice: the
+> translation proxy is CLIProxyAPI, not LiteLLM (see the README), and the NIM model names
+> below are stale — NVIDIA retired several of them. The architecture and the risk analysis
+> still hold.
+
 > Research-first design document. **No production code in this repo yet** — this file
 > defines what we will build and the order to build it.
 >
