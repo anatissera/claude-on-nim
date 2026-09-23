@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Launches your normal, interactive `claude` CLI — same skills, MCPs,
 # settings, CLAUDE.md — but redirected to run inference through the
-# LiteLLM proxy onto NVIDIA NIM instead of Anthropic.
+# CLIProxyAPI proxy onto NVIDIA NIM instead of Anthropic.
 #
 # Auto-tmux mode: If you're not already in tmux, this script will relaunch
 # itself inside a new persistent session. This way your Claude session
@@ -34,7 +34,7 @@ fi
 MODEL_SHORTCUT="${1:-}"
 # The sonnet/opus/haiku words map to the same upstream models as the
 # claude-sonnet-4-6 / claude-opus-4-8 / claude-haiku-4-5 aliases in
-# proxy/litellm-config.yaml, so an interactive session and the headless agent
+# proxy/cliproxy-config.yaml.template, so an interactive session and the headless agent
 # land on the same model when asked for the same tier.
 case "$MODEL_SHORTCUT" in
   sonnet|glm) MODEL_NAME="glm" ; shift ;;
@@ -43,7 +43,7 @@ case "$MODEL_SHORTCUT" in
   deepseek) MODEL_NAME="deepseek" ; shift ;;
   gpt-oss) MODEL_NAME="gpt-oss" ; shift ;;
   -*|"") MODEL_NAME="" ;; # looks like a claude flag, or nothing given -- don't consume it
-  *) MODEL_NAME="$MODEL_SHORTCUT" ; shift ;; # assume it's a raw model_name from litellm-config.yaml
+  *) MODEL_NAME="$MODEL_SHORTCUT" ; shift ;; # assume it's a raw alias from cliproxy-config.yaml.template
 esac
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -64,18 +64,26 @@ if [[ -z "${PROXY_MASTER_KEY:-}" || "$PROXY_MASTER_KEY" == "sk-replace-me" ]]; t
   exit 1
 fi
 
-PROXY_URL="http://localhost:4000"
+PROXY_URL="http://localhost:8317"
 
-if ! curl -sS -o /dev/null -w '' "$PROXY_URL/health/liveliness" 2>/dev/null; then
+if ! curl -sS -o /dev/null -w '' "$PROXY_URL/healthz" 2>/dev/null; then
+  # CLIProxyAPI reads literal keys from a rendered config, so on a fresh clone
+  # that file does not exist yet -- and compose would silently bind-mount a
+  # directory in its place. Render it before starting anything.
+  if [[ ! -f "$REPO_DIR/proxy/cliproxy-config.yaml" ]]; then
+    echo "INFO: proxy config not rendered yet, generating it from .env..." >&2
+    "$REPO_DIR/scripts/render-cliproxy-config.sh"
+  fi
+
   echo "INFO: proxy not reachable at $PROXY_URL, starting it via docker compose..." >&2
-  (cd "$REPO_DIR" && docker compose up -d proxy)
+  (cd "$REPO_DIR" && docker compose up -d cliproxy)
 
   for attempt in $(seq 1 12); do
-    if curl -sS -o /dev/null -w '' "$PROXY_URL/health/liveliness" 2>/dev/null; then
+    if curl -sS -o /dev/null -w '' "$PROXY_URL/healthz" 2>/dev/null; then
       break
     fi
     if [[ "$attempt" == 12 ]]; then
-      echo "FAIL: proxy did not become healthy in time. Check 'docker compose logs proxy'." >&2
+      echo "FAIL: proxy did not become healthy in time. Check 'docker compose logs cliproxy'." >&2
       exit 1
     fi
     sleep 5
