@@ -9,10 +9,13 @@ via Tailscale. Includes optional autonomous agent mode with code verification fo
 **Interactive Claude with NIM models:**
 ```bash
 cd /path/to/your-random-repo
-claude-nim                      # fresh session, default model (glm-5.1)
-claude-nim gpt-oss              # fresh session on gpt-oss-120b
+claude-nim                      # fresh session, default model (glm-5.3)
+claude-nim gpt-oss              # fresh session on gpt-oss-20b
 claude-nim kimi --continue      # continue last conversation, switch to kimi
 ```
+
+> Only `glm` (`z-ai/glm-5.3`) is reliably warm on NIM's free tier. The other models are
+> cold-start bound and can take minutes to answer the first request.
 
 **Inside the session, use slash commands:**
 ```
@@ -73,7 +76,18 @@ Switch to a different model mid-conversation without losing context.
 # (full transcript replayed, handoff summary included)
 ```
 
-Supported models: `glm`, `deepseek`, `kimi`, `gpt-oss`, or any raw `litellm` model name.
+Supported models: `glm`, `glm-flash`, `kimi`, `deepseek`, `gpt-oss`, or any raw `litellm`
+model name. The tier words `sonnet` / `opus` / `haiku` also work and resolve to the same
+upstream models the headless agent uses for `claude-sonnet-4-6` / `claude-opus-4-8` /
+`claude-haiku-4-5`.
+
+NVIDIA retires models from the NIM catalog without notice, and a retired model returns
+HTTP 410 rather than falling back. Check what's live before editing
+`proxy/litellm-config.yaml`:
+
+```bash
+curl -H "Authorization: Bearer $NVIDIA_NIM_API_KEY" https://integrate.api.nvidia.com/v1/models
+```
 
 ### `/cc-remote [port]`
 Expose this running session over ttyd on Tailscale, so you can control it from another device.
@@ -90,7 +104,7 @@ If you want to manage multiple named, persistent sessions:
 
 ```bash
 # Start a named session
-cc-up work glm                          # persistent session "work" on glm-5.1
+cc-up work glm                          # persistent session "work" on glm-5.3
 
 # In another terminal, switch its model
 cc-switch work kimi                     # asks work session for handoff, relaunches on kimi

@@ -9,12 +9,14 @@
 # /cc-switch without needing to open another terminal or use cc-up.
 #
 # Usage (from anywhere, with your repo's .claude/ and cwd):
-#   claude-nim                      # fresh session, default model (glm-5.1)
-#   claude-nim gpt-oss              # fresh session on gpt-oss-120b
-#   claude-nim kimi --continue      # continue your last conversation on kimi-k2.6
+#   claude-nim                      # fresh session, default model (glm-5.3)
+#   claude-nim gpt-oss              # fresh session on gpt-oss-20b
+#   claude-nim kimi --continue      # continue your last conversation on kimi-k3
 #   claude-nim deepseek --resume <session_id>
 #
-# Model shortcuts: sonnet|glm, opus|deepseek, haiku|kimi, gpt-oss.
+# Model shortcuts: sonnet|glm, opus|kimi, haiku|glm-flash, deepseek, gpt-oss.
+# Only glm (z-ai/glm-5.3) is reliably warm on NIM's free tier; the others can
+# take minutes to return on a cold start.
 # Inside tmux: /cc-switch <model> to switch models mid-conversation.
 #             /cc-remote [port] to expose this session over Tailscale.
 set -euo pipefail
@@ -30,10 +32,15 @@ if [[ -z "${TMUX:-}" ]]; then
 fi
 
 MODEL_SHORTCUT="${1:-}"
+# The sonnet/opus/haiku words map to the same upstream models as the
+# claude-sonnet-4-6 / claude-opus-4-8 / claude-haiku-4-5 aliases in
+# proxy/litellm-config.yaml, so an interactive session and the headless agent
+# land on the same model when asked for the same tier.
 case "$MODEL_SHORTCUT" in
   sonnet|glm) MODEL_NAME="glm" ; shift ;;
-  opus|deepseek) MODEL_NAME="deepseek" ; shift ;;
-  haiku|kimi) MODEL_NAME="kimi" ; shift ;;
+  opus|kimi) MODEL_NAME="kimi" ; shift ;;
+  haiku|glm-flash) MODEL_NAME="glm-flash" ; shift ;;
+  deepseek) MODEL_NAME="deepseek" ; shift ;;
   gpt-oss) MODEL_NAME="gpt-oss" ; shift ;;
   -*|"") MODEL_NAME="" ;; # looks like a claude flag, or nothing given -- don't consume it
   *) MODEL_NAME="$MODEL_SHORTCUT" ; shift ;; # assume it's a raw model_name from litellm-config.yaml
