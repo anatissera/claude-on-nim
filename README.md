@@ -76,14 +76,14 @@ Switch to a different model mid-conversation without losing context.
 # (full transcript replayed, handoff summary included)
 ```
 
-Supported models: `glm`, `glm-flash`, `kimi`, `deepseek`, `gpt-oss`, or any raw `litellm`
-model name. The tier words `sonnet` / `opus` / `haiku` also work and resolve to the same
+Supported models: `glm`, `glm-flash`, `kimi`, `deepseek`, `gpt-oss`, or any raw alias
+from the proxy config. The tier words `sonnet` / `opus` / `haiku` also work and resolve to the same
 upstream models the headless agent uses for `claude-sonnet-4-6` / `claude-opus-4-8` /
 `claude-haiku-4-5`.
 
 NVIDIA retires models from the NIM catalog without notice, and a retired model returns
 HTTP 410 rather than falling back. Check what's live before editing
-`proxy/litellm-config.yaml`:
+`proxy/cliproxy-config.yaml.template`:
 
 ```bash
 curl -H "Authorization: Bearer $NVIDIA_NIM_API_KEY" https://integrate.api.nvidia.com/v1/models
@@ -142,7 +142,7 @@ For unattended tasks, the Docker container runs an autonomous agent with verifie
 ### How it works
 
 The agent runs the Claude Agent SDK in a container and:
-- Routes inference through the LiteLLM proxy onto NIM instead of Anthropic
+- Routes inference through the CLIProxyAPI proxy onto NIM instead of Anthropic
 - Has a `PostToolUse` hook that runs linters, type-checkers, tests on generated code
 - Reports failures back to the model loop so it can self-correct
 - Has Git credentials injected, can commit and push within guardrails (see Agent hardening below)
@@ -153,7 +153,7 @@ The agent runs the Claude Agent SDK in a container and:
 cd agent
 npm install
 npm run build
-ANTHROPIC_BASE_URL=http://localhost:4000 \
+ANTHROPIC_BASE_URL=http://localhost:8317 \
 ANTHROPIC_AUTH_TOKEN=$PROXY_MASTER_KEY \
 AGENT_CWD=$(pwd)/../workspace \
 node dist/main.js "your prompt here"
@@ -161,27 +161,26 @@ node dist/main.js "your prompt here"
 
 Run `npm run lint && npm run typecheck && npm test` before committing.
 
-## Experimental: CLIProxyAPI as a LiteLLM replacement
+## The proxy
 
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) speaks the same Anthropic
-`/v1/messages` surface and reaches NIM as a generic OpenAI-compatible upstream, so it can
-take over the proxy role — bringing multi-key pooling, per-credential cooldown, retry
-rounds and request logging that LiteLLM's config can't express. It runs on port 8317
-alongside the existing proxy on 4000, so switching back is one env var.
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) serves the Anthropic
+`/v1/messages` surface the Agent SDK speaks and reaches NIM as a generic
+OpenAI-compatible upstream. It replaced a LiteLLM service that did the same translation,
+and brought multi-key pooling, per-credential cooldown, retry rounds and paired request
+logging that LiteLLM's config couldn't express — plus it's a ~30MB Go binary instead of a
+~1GB Python image.
 
 ```bash
 ./scripts/render-cliproxy-config.sh        # renders the template using .env
 docker compose up -d cliproxy
-PROXY_URL=http://localhost:8317 ./scripts/validate-proxy.sh claude-sonnet-4-6
+./scripts/validate-proxy.sh claude-sonnet-4-6
 ```
 
 CLIProxyAPI parses its config with a plain YAML unmarshal and has no `os.environ/VAR`
 equivalent, so keys have to be literal in the file. That's why
 `proxy/cliproxy-config.yaml.template` is committed and the rendered
-`proxy/cliproxy-config.yaml` is gitignored — treat it like `.env`.
-
-Its model aliases mirror `proxy/litellm-config.yaml`, so the same catalog-drift caveat
-above applies to both.
+`proxy/cliproxy-config.yaml` is gitignored — treat it like `.env`. `claude-nim` renders
+it for you on first run.
 
 **Raising the rate-limit ceiling.** Each free NIM key carries its own ~40 RPM allowance and
 credit pool. Add `NVIDIA_NIM_API_KEY_2` (then `_3`, …) to `.env`, re-render, and
@@ -216,7 +215,7 @@ Use `glm` for interactive work.
 ## Architecture
 
 ### Endpoint redirection
-The Claude Agent SDK speaks the Anthropic Messages API. NVIDIA NIM speaks OpenAI-compatible endpoints. A proxy (LiteLLM) translates between them. We route via `ANTHROPIC_BASE_URL` environment variable, no SDK fork needed.
+The Claude Agent SDK speaks the Anthropic Messages API. NVIDIA NIM speaks OpenAI-compatible endpoints. A proxy (CLIProxyAPI) translates between them. We route via the `ANTHROPIC_BASE_URL` environment variable, no SDK fork needed.
 
 ### Self-verifying execution
 A `PostToolUse` hook runs linters, type-checkers, and test suites on generated code and feeds failures back into the agent loop for self-correction. Unlike system prompts, hooks are deterministic and always fire.
@@ -244,7 +243,7 @@ All hooks are deterministic and fire regardless of permission mode, making them 
 
 ```
 agent/              Claude Agent SDK driver, hooks, verification (TypeScript)
-proxy/              LiteLLM config that translates Anthropic to NIM (OpenAI)
+proxy/              CLIProxyAPI config template + rendered config, logs, credential state
 scripts/            claude-nim.sh, cc-up, cc-remote, cc-switch, validate-proxy.sh
 workspace/          mounted target repo the agent edits (empty, gitignored)
 docker-compose.yml  proxy + agent services
@@ -254,7 +253,7 @@ docker-compose.yml  proxy + agent services
 
 [Claude Agent SDK docs](https://code.claude.com/docs/en/agent-sdk/)
 [NVIDIA NIM API](https://docs.nvidia.com/nim/large-language-models/latest/api-reference.html)
-[LiteLLM](https://github.com/BerriAI/litellm)
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
 
 ## Credits
 

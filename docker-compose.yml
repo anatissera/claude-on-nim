@@ -1,44 +1,13 @@
 services:
-  proxy:
-    # Pinned to an explicit release, not the rolling `main-stable` tag (being
-    # deprecated 2026-06-30) and well past the malware-compromised
-    # 1.82.7/1.82.8 PyPI releases.
-    image: ghcr.io/berriai/litellm:v1.89.1
-    command: ["--config", "/app/config.yaml"]
-    environment:
-      NVIDIA_NIM_API_KEY: "${NVIDIA_NIM_API_KEY}"
-      PROXY_MASTER_KEY: "${PROXY_MASTER_KEY}"
-      LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES: "true"
-    volumes:
-      - ./proxy/litellm-config.yaml:/app/config.yaml:ro
-    ports:
-      - "4000:4000"
-    healthcheck:
-      # The litellm image ships no wget/curl; use the bundled python3 instead.
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import sys,urllib.request as u; sys.exit(0 if u.urlopen('http://localhost:4000/health/liveliness').status==200 else 1)",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-
-  # Candidate replacement for `proxy` (see PRD/plan). Runs alongside LiteLLM on a
-  # separate port during the migration so rollback is a single env var:
-  # ANTHROPIC_BASE_URL back to http://proxy:4000.
-  #
-  # Not in `depends_on` for `agent` yet -- Phase 0 only validates it in
-  # isolation via scripts/validate-proxy.sh, exactly the way the PRD says to
-  # validate the proxy before wiring the SDK in.
+  # Translates the Anthropic Messages protocol the Agent SDK speaks into the
+  # OpenAI-compatible calls NVIDIA NIM serves. Replaced a LiteLLM service that
+  # did the same job; see the README for what the swap bought.
   cliproxy:
-    # Pinned, not `latest`, for the same reason the LiteLLM tag above is pinned.
+    # Pinned to a release rather than `latest`: a proxy that silently changes
+    # translation behaviour under you is the last thing you want to debug.
     image: eceasy/cli-proxy-api:v7.3.15
     # The image sets CMD but no ENTRYPOINT, so the binary has to be named here
-    # explicitly -- unlike the litellm service above, where command: is appended
-    # to an entrypoint.
+    # explicitly.
     command: ["./CLIProxyAPI", "--config", "/CLIProxyAPI/config.yaml"]
     # CPA runs as root in the image and writes cooldown state and logs into the
     # mounted auth-dir, which leaves root-owned files on the host that a normal
@@ -80,10 +49,10 @@ services:
   agent:
     build: ./agent
     depends_on:
-      proxy:
+      cliproxy:
         condition: service_healthy
     environment:
-      ANTHROPIC_BASE_URL: "http://proxy:4000"
+      ANTHROPIC_BASE_URL: "http://cliproxy:8317"
       ANTHROPIC_AUTH_TOKEN: "${PROXY_MASTER_KEY}"
       AGENT_MODEL: "${AGENT_MODEL:-claude-sonnet-4-6}"
       AGENT_FALLBACK_MODEL: "${AGENT_FALLBACK_MODEL:-claude-haiku-4-5}"
